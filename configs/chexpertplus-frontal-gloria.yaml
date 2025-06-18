@@ -25,19 +25,19 @@ optimizer:
 model:
   class_path: LitModel
   init_args:
-    model_path: "/opt/gpudata/remix/gloria_chexpert_resnet50.ckpt" # this is GLoRIA
+    model_path: "/opt/gpudata/remix/gloria_chexpert_resnet50.ckpt" # this is GLoRIA, code will use the right tokenizer
     # loss_combo: "" # set this at runtime or in script
     # checkpoint_path: "" # set this at runtime or in script
 data:
   class_path: LitData
   init_args:
-    model_path: "/opt/gpudata/remix/gloria_chexpert_resnet50.ckpt" # this is GLoRIA
+    model_path: "/opt/gpudata/remix/gloria_chexpert_resnet50.ckpt" # this is GLoRIA, code will use the right tokenizer
     img_dir: "/opt/gpudata/chexpertplus/PNG"
     img_ext: ".png"
-    splits_path: "/opt/gpudata/labrag-chexpertplus/split.csv"
-    notes_path: "/opt/gpudata/labrag-chexpertplus/report.csv"
+    splits_path: "/opt/gpudata/remix/chexpertplus-split.csv"
+    notes_path: "/opt/gpudata/remix/chexpertplus-report.csv"
     # section: "" # set this at runtime or in script
-    metadata_path: "/opt/gpudata/labrag-chexpertplus/metadata.csv"
+    metadata_path: "/opt/gpudata/remix/chexpertplus-metadata.csv"
     frontal_only: True
     one_image_per_study: True
     num_chunks: 6

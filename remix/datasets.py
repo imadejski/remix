@@ -88,17 +88,13 @@ class CXRDataset(Dataset):
             .sort_values(["subject_id", "study_id", "dicom_id"])
         )
 
-        self.image_paths = (
-            img_dir
-            + "/p"
-            + df["subject_id"].astype(str).str[:2]
-            + "/p"
-            + df["subject_id"].astype(str)
-            + "/s"
-            + df["study_id"].astype(str)
-            + "/"
-            + df["dicom_id"]
-            + img_ext
+        self.image_paths = get_image_paths(
+            split=split,
+            img_dir=img_dir,
+            img_ext=img_ext,
+            subject_ids=df["subject_id"],
+            study_ids=df["study_id"],
+            dicom_ids=df["dicom_id"],
         )
         self.transform = ResNet50Transform()
 
@@ -196,3 +192,96 @@ def get_chunked_note(
             chunk = " ".join(sents[lo:hi])
             chunks.append(chunk)
     return chunks
+
+
+def get_mimic_paths(
+    *,  # enforce kwargs
+    img_dir: str,
+    img_ext: str,
+    subject_ids: pd.Series,
+    study_ids: pd.Series,
+    dicom_ids: pd.Series,
+) -> pd.Series:
+    return (
+        img_dir
+        + "/p"
+        + subject_ids.astype(str).str[:2]
+        + "/p"
+        + subject_ids.astype(str)
+        + "/s"
+        + study_ids.astype(str)
+        + "/"
+        + dicom_ids
+        + img_ext
+    )
+
+
+def get_chexpertplus_paths(
+    *,  # enforce kwargs
+    img_dir: str,
+    img_ext: str,
+    subject_ids: pd.Series,
+    study_ids: pd.Series,
+    dicom_ids: pd.Series,
+    split: SPLIT_T,
+) -> pd.Series:
+    split_dir = "train"
+    if split == "test":
+        # chexpertplus came with only train/valid splits
+        # the provided valid split was renamed test
+        # a new validate split was created from the train split
+        split_dir = "valid"
+
+    # subject, study, and dicom IDs were joined with underscores to create
+    # globally unique IDs at each level, however original image data paths
+    # were not modified so deconstruct study and dicom IDs to get path
+    # fmt: off
+    return (
+        img_dir
+        + "/"
+        + split_dir
+        + "/"
+        + subject_ids
+        + "/"
+        + study_ids.str.split("_").str[-1]
+        + "/"
+        + dicom_ids.str.split("_").str[-2]  # this is first part of dicom_id, e.g. view1
+        + "_"
+        + dicom_ids.str.split("_").str[-1]  # this is second part of dicom_id, e.g. frontal
+        + img_ext
+    )
+    # fmt: on
+
+
+def get_image_paths(
+    *,  # enforce kwargs
+    img_dir: str,
+    img_ext: str,
+    subject_ids: pd.Series,
+    study_ids: pd.Series,
+    dicom_ids: pd.Series,
+    split: SPLIT_T,
+) -> pd.Series:
+    if "mimic" in img_dir:
+        image_paths = get_mimic_paths(
+            img_dir=img_dir,
+            img_ext=img_ext,
+            subject_ids=subject_ids,
+            study_ids=study_ids,
+            dicom_ids=dicom_ids,
+        )
+    elif "chexpertplus" in img_dir:
+        image_paths = get_chexpertplus_paths(
+            split=split,
+            img_dir=img_dir,
+            img_ext=img_ext,
+            subject_ids=subject_ids,
+            study_ids=study_ids,
+            dicom_ids=dicom_ids,
+        )
+    else:
+        raise ValueError(
+            f"Cannot infer from image directory path ({img_dir}) which "
+            f"dataset style to use for getting image paths."
+        )
+    return image_paths

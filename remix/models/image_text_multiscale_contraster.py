@@ -42,6 +42,13 @@ class ImageTextMultiScaleContrasterConfig(BertConfig):
         self.avg_patches_after_proj = avg_patches_after_proj
         self.loss_combo = loss_combo
 
+    @classmethod
+    def from_pretrained(cls, pretrained_model_name_or_path, **kwargs):
+        temp = pretrained_model_name_or_path
+        if "gloria_chexpert_resnet50.ckpt" in pretrained_model_name_or_path:
+            temp = "emilyalsentzer/Bio_ClinicalBERT"
+        return super().from_pretrained(temp, **kwargs)
+
 
 class ImageTextMultiScaleContraster(BertForMaskedLM):
     config_class = ImageTextMultiScaleContrasterConfig
