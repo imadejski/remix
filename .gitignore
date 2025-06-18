@@ -173,3 +173,4 @@ temp.*
 temp/
 
 runs/
+run-*.sh
