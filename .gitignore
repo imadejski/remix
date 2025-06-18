@@ -161,3 +161,15 @@ cython_debug/
 
 # VSCode
 .vscode
+
+# GLORIA-specific directories
+data_collection/gloria/embeddings/
+data_collection/gloria/data/
+data_collection/gloria/pretrained/
+
+temp-*
+temp_*
+temp.*
+temp/
+
+runs/

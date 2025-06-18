@@ -1,0 +1,47 @@
+seed_everything: 42
+trainer:
+  # devices: 1
+  # limit_train_batches: 2
+  # limit_val_batches: 2
+  # limit_test_batches: 2
+  # limit_predict_batches: 2
+  accumulate_grad_batches: 1 # check what batch size is
+  precision: "16-mixed"
+  logger:
+    class_path: StrictWandbLogger
+    init_args:
+      project: "ReMIX"
+      save_dir: "./runs"
+  callbacks:
+    - class_path: lightning.pytorch.callbacks.LearningRateMonitor
+      init_args:
+        logging_interval: "step"
+  max_epochs: 10
+  log_every_n_steps: 1
+optimizer:
+  class_path: torch.optim.Adam
+  init_args:
+    lr: 0.00001
+model:
+  class_path: LitModel
+  init_args:
+    model_path: "/opt/gpudata/remix/gloria_chexpert_resnet50.ckpt" # this is GLoRIA, code will use the right tokenizer
+    # loss_combo: "" # set this at runtime or in script
+    # checkpoint_path: "" # set this at runtime or in script
+data:
+  class_path: LitData
+  init_args:
+    model_path: "/opt/gpudata/remix/gloria_chexpert_resnet50.ckpt" # this is GLoRIA, code will use the right tokenizer
+    img_dir: "/opt/gpudata/chexpertplus/PNG"
+    img_ext: ".png"
+    splits_path: "/opt/gpudata/remix/chexpertplus-split.csv"
+    notes_path: "/opt/gpudata/remix/chexpertplus-report.csv"
+    # section: "" # set this at runtime or in script
+    metadata_path: "/opt/gpudata/remix/chexpertplus-metadata.csv"
+    frontal_only: True
+    one_image_per_study: True
+    num_chunks: 6
+    num_overlap: 0
+    mlm_probability: 0.15
+    batch_size: 16
+    num_workers: 4
