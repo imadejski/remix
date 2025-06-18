@@ -166,3 +166,10 @@ cython_debug/
 data_collection/gloria/embeddings/
 data_collection/gloria/data/
 data_collection/gloria/pretrained/
+
+temp-*
+temp_*
+temp.*
+temp/
+
+runs/

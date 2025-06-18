@@ -1,7 +1,6 @@
 from collections import OrderedDict
 
 import torch
-from torch import nn
 from torch.hub import load_state_dict_from_url
 from torch.nn import functional as F
 from torchvision.models.resnet import Bottleneck, ResNet
@@ -32,11 +31,8 @@ class ResNet50Encoder(ResNet):
 
         return patch_emb, pooled
 
-    def _load_biovil_weights(self, url):
-        state_dict = load_state_dict_from_url(
-            url,
-            map_location="cpu",
-        )
+    def _load_biovil_weights(self, url: str) -> None:
+        state_dict = load_state_dict_from_url(url, map_location="cpu")
         new_state_dict = OrderedDict()
         for k, v in state_dict.items():
             if k.startswith("encoder.encoder."):
@@ -51,8 +47,25 @@ class ResNet50Encoder(ResNet):
             strict=True,
         )
 
-    def load_biovil_weights(self):
+    def load_biovil_weights(self) -> None:
+        print("Loaded BioViL ResNet weights")
         self._load_biovil_weights(BIOVIL_URL)
 
-    def load_biovil_t_weights(self):
+    def load_biovil_t_weights(self) -> None:
+        print("Loaded BioViL-T ResNet weights")
         self._load_biovil_weights(BIOVIL_T_URL)
+
+    def load_gloria_weights(self, gloria_resnet50_path: str):
+        ckpt = torch.load(gloria_resnet50_path, map_location="cpu")
+        sd = ckpt["state_dict"]
+        new_state_dict = OrderedDict()
+        for k, v in sd.items():
+            k = k.replace("gloria.img_encoder.model.", "")
+            if k.startswith("gloria"):
+                continue
+            new_state_dict[k] = v
+        self.load_state_dict(
+            new_state_dict,
+            strict=True,
+        )
+        print("Loaded GLoRIA ResNet weights")

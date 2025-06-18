@@ -4,9 +4,8 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn.functional as F
-from tqdm import tqdm
-
 from models import InferenceEngine
+from tqdm import tqdm
 
 BASE_MODEL_PATH = "microsoft/BiomedVLP-CXR-BERT-specialized"
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")

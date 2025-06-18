@@ -1,4 +1,4 @@
-from pathlib import Path
+from collections import OrderedDict
 from typing import Literal
 
 import torch
@@ -6,9 +6,16 @@ import torch.nn.functional as F
 from PIL import Image
 from torchvision import transforms
 from torchvision.io import read_image
-from transformers import BertConfig, BertForMaskedLM, BertModel, BertTokenizer
+from transformers import BertConfig, BertForMaskedLM, BertTokenizer
 
 from .modules import LocalGlobalContraster, ResNet50Encoder
+
+ALIGNMENT_T = Literal[
+    "igl_tgl",  # igl_tgl is image-global/local <--> text-global/local
+    "igl_tg",  # igl_tg is image-global/local <--> text-global
+    "ig_tgl",  # ig_tgl is image-global <--> text-global/local
+    "ig_tg",  # ig_tg is image-global <--> text-global
+]
 
 
 class ImageTextMultiScaleContrasterConfig(BertConfig):
@@ -24,11 +31,7 @@ class ImageTextMultiScaleContrasterConfig(BertConfig):
         projection_size: int = 128,
         contraster_temperature: float = 0.07,
         avg_patches_after_proj: bool = True,
-        loss_combo: Literal["igl_tgl", "igl_tg", "ig_tgl", "ig_tg"] = "igl_tgl",
-        # igl_tgl is image-global/local <--> text-global/local
-        # igl_tg is image-global/local <--> text-global
-        # ig_tgl is image-global <--> text-global/local
-        # ig_tg is image-global <--> text-global
+        loss_combo: ALIGNMENT_T = "igl_tgl",
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -40,11 +43,13 @@ class ImageTextMultiScaleContrasterConfig(BertConfig):
         self.loss_combo = loss_combo
 
 
-class ImageTextMultiScaleContraster(BertModel):
+class ImageTextMultiScaleContraster(BertForMaskedLM):
     config_class = ImageTextMultiScaleContrasterConfig
 
     def __init__(self, config: ImageTextMultiScaleContrasterConfig):
-        super().__init__(config, add_pooling_layer=False)
+        config.output_hidden_states = True
+        # No pooling layer on base BertModel
+        super().__init__(config)
         self.resnet = ResNet50Encoder(config)
         self.contraster = LocalGlobalContraster(config)
 
@@ -56,10 +61,17 @@ class ImageTextMultiScaleContraster(BertModel):
         *,  # enforce kwargs
         input_ids_global: torch.Tensor,  # (B, T)
         attention_mask_global: torch.Tensor,  # (B, T)
+        labels_global: torch.Tensor | None = None,  # (B, T)
         input_ids_locals: torch.Tensor,  # (B, Lx, T)
         attention_mask_locals: torch.Tensor,  # (B, Lx, T)
+        labels_locals: torch.Tensor | None = None,  # (B, Lx, T)
         images: torch.Tensor,  # (B, C, Wh, Ww),
     ) -> torch.Tensor:
+        if (labels_global is None) != (labels_locals is None):
+            raise ValueError(
+                "Global and locals must both be either provided or omitted"
+            )
+
         B, Lx, T = input_ids_locals.shape
         input_ids = torch.concat(
             [
@@ -73,13 +85,23 @@ class ImageTextMultiScaleContraster(BertModel):
                 attention_mask_locals.view(-1, T),
             ]
         )
-        text_embed_out = (
-            super()
-            .forward(input_ids=input_ids, attention_mask=attention_mask)
-            .last_hidden_state
-        )  # (B + BLx, T, Hx)
+        labels = None
+        if labels_global is not None and labels_locals is not None:
+            labels = torch.concat(
+                [
+                    labels_global,
+                    labels_locals.view(-1, T),
+                ],
+            )
+        bert_mlm_out = super().forward(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            labels=labels,
+        )
+        # get last hidden state of underlying bert model
+        text_embed_out = bert_mlm_out.hidden_states[-1]  # (B + BLx, T, Hx)
 
-        # use 0th token of text sequence (should be [CLS] token embedding)
+        # use 0th token of text sequence ([CLS] token embedding)
         text_embed_global = text_embed_out[:B, 0, :]  # (B, Hx)
         text_embed_locals = text_embed_out[B:, 0, :].view(B, Lx, -1)  # (B, Lx, Hx)
 
@@ -91,12 +113,72 @@ class ImageTextMultiScaleContraster(BertModel):
         image_embed_locals = image_embed_locals.view(B, Hy, Ph * Pw)  # (B, Hy, Ly=PhPw)
         image_embed_locals = image_embed_locals.mT  # (B, Ly, Hy)
 
-        return self.contraster(
+        contrastive_loss = self.contraster(
             t_global=text_embed_global,
             t_locals=text_embed_locals,
             i_global=image_embed_global,
             i_locals=image_embed_locals,
         )
+        if bert_mlm_out.loss is not None:
+            return contrastive_loss + bert_mlm_out.loss
+        return contrastive_loss
+
+    @classmethod
+    def from_pretrained(
+        cls,
+        pretrained_model_name_or_path: str,
+        **kwargs,
+    ):
+        temp = pretrained_model_name_or_path
+        # if loading base gloria checkpoint, use base bert model used by
+        # gloria authors for configuration and load bert state dict after
+        if "gloria_chexpert_resnet50.ckpt" in pretrained_model_name_or_path:
+            temp = "emilyalsentzer/Bio_ClinicalBERT"
+
+        model = super().from_pretrained(temp, **kwargs)
+
+        # initialize image model from pretrained weights
+        if pretrained_model_name_or_path == "microsoft/BiomedVLP-BioViL-T":
+            model.resnet.load_biovil_t_weights()
+        elif (
+            pretrained_model_name_or_path == "microsoft/BiomedVLP-CXR-BERT-specialized"
+        ):
+            model.resnet.load_biovil_weights()
+        elif "gloria_chexpert_resnet50.ckpt" in pretrained_model_name_or_path:
+            model.load_gloria_weights(pretrained_model_name_or_path)
+            model.resnet.load_gloria_weights(pretrained_model_name_or_path)
+        else:
+            print(
+                "Loading pretrained model from non-base model, "
+                "check that both image and text encoders are loaded correctly"
+            )
+        return model
+
+    def load_gloria_weights(self, gloria_checkpoint_path: str) -> None:
+        ckpt = torch.load(gloria_checkpoint_path, map_location="cpu")
+        sd = ckpt["state_dict"]
+        new_state_dict = OrderedDict()
+        for k, v in sd.items():
+            k = k.replace("gloria.text_encoder.model.", "bert.")
+            if k.startswith("gloria"):
+                continue
+            new_state_dict[k] = v
+        incompatible_keys = self.load_state_dict(
+            new_state_dict,
+            strict=False,
+        )
+
+        print("Loaded GLoRIA BERT weights, missing the following keys:")
+        for k in incompatible_keys.missing_keys:
+            if k.startswith("resnet.") or k.startswith("contraster."):
+                # expected that these keys won't be in sd
+                continue
+            print(k)
+        print()
+        print("Loaded GLoRIA BERT weights, did not expect the following keys:")
+        for k in incompatible_keys.unexpected_keys:
+            print(k)
+        print()
 
 
 class InferenceEngine:

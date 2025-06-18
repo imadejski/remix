@@ -1,5 +1,15 @@
 import torch
 from torchvision.transforms import CenterCrop, Compose, Resize, ToTensor
+from transformers import BertTokenizer
+
+
+class CXRTokenizer(BertTokenizer):
+    @classmethod
+    def from_pretrained(cls, pretrained_model_name_or_path, **kwargs):
+        temp = pretrained_model_name_or_path
+        if "gloria_chexpert_resnet50.ckpt" in pretrained_model_name_or_path:
+            temp = "emilyalsentzer/Bio_ClinicalBERT"
+        return super().from_pretrained(temp, **kwargs)
 
 
 def expand_channels(data: torch.Tensor) -> torch.Tensor:

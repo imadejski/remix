@@ -1,0 +1,32 @@
+[build-system]
+requires = ["hatchling", "hatch-requirements-txt"]
+build-backend = "hatchling.build"
+
+[project]
+name = "remix"
+authors = [
+  { name="Irene Madejski", email="imadejski@uchicago.edu" },
+  { name="Steven Song", email="songs1@uchicago.edu" },
+]
+description = ""
+readme = "README.md"
+requires-python = ">=3.10"
+dynamic = ["version", "dependencies"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+]
+
+[project.urls]
+Homepage = "https://github.com/imadejski/remix"
+Issues = "https://github.com/imadejski/remix/issues"
+
+[tool.hatch.version]
+path = "remix/__init__.py"
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.hatch.metadata.hooks.requirements_txt]
+files = ["requirements.txt"]

@@ -3,9 +3,8 @@ import argparse
 import numpy as np
 import pandas as pd
 import torch
-from tqdm import tqdm
-
 from models import InferenceEngine
+from tqdm import tqdm
 
 RESIZE = 512
 CENTER_CROP_SIZE = 512
