@@ -46,7 +46,7 @@ class ResNet50Transform:
                     (normalize[0], normalize[0], normalize[0]),
                     (normalize[1], normalize[1], normalize[1]),
                 )
-            transforms.append(Normalize(std=normalize[0], std=normalize[1]))
+            transforms.append(Normalize(mean=normalize[0], std=normalize[1]))
         self.transform = Compose(transforms)
 
     def __call__(self, x: torch.Tensor) -> torch.Tensor:
