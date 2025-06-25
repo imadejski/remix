@@ -27,6 +27,23 @@ def expand_channels(data: torch.Tensor) -> torch.Tensor:
     raise ValueError(f"Expected input of shape [1 or 3, H, W], found {data.shape}")
 
 
+def make_upsample_transform(upsample: int) -> Upsample:
+    # this is buried in the GLoRIA model forward function
+    f = Upsample(
+        size=(upsample, upsample),
+        mode="bilinear",
+        align_corners=True,
+    )
+
+    def upsample_image(data: torch.Tensor) -> torch.Tensor:
+        x = data.unsqueeze(0)
+        x = f(x)
+        x = x.squeeze()
+        return x
+
+    return upsample_image
+
+
 class ResNet50Transform:
     def __init__(
         self,
@@ -50,14 +67,7 @@ class ResNet50Transform:
                 )
             transforms.append(Normalize(mean=normalize[0], std=normalize[1]))
         if upsample is not None:
-            transforms.append(
-                # this is buried in the GLoRIA model forward function
-                Upsample(
-                    size=(upsample, upsample),
-                    mode="bilinear",
-                    align_corners=True,
-                )
-            )
+            transforms.append(make_upsample_transform(upsample))
         self.transform = Compose(transforms)
 
     def __call__(self, x: torch.Tensor) -> torch.Tensor:
