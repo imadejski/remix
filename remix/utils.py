@@ -1,6 +1,8 @@
 import torch
-from torchvision.transforms import CenterCrop, Compose, Resize, ToTensor
+from torchvision.transforms import CenterCrop, Compose, Normalize, Resize, ToTensor
 from transformers import BertTokenizer
+
+NORM_T = tuple[float, float, float]
 
 
 class CXRTokenizer(BertTokenizer):
@@ -25,16 +27,47 @@ def expand_channels(data: torch.Tensor) -> torch.Tensor:
 
 
 class ResNet50Transform:
-    # TODO normalize?
-    def __init__(self, resize: int = 512, center_crop: int = 448):
-        self.transform = Compose(
-            [
-                Resize(resize, antialias=True),
-                CenterCrop(center_crop),
-                ToTensor(),
-                expand_channels,
-            ]
-        )
+    def __init__(
+        self,
+        *,  # enforce kwargs
+        resize: int,
+        center_crop: int,
+        normalize: tuple[float, float] | tuple[NORM_T, NORM_T] | None,
+    ):
+        transforms = [
+            Resize(resize, antialias=True),
+            CenterCrop(center_crop),
+            ToTensor(),
+            expand_channels,
+        ]
+        if normalize is not None:
+            if isinstance(normalize[0], float):
+                normalize = (
+                    (normalize[0], normalize[0], normalize[0]),
+                    (normalize[1], normalize[1], normalize[1]),
+                )
+            transforms.append(Normalize(std=normalize[0], std=normalize[1]))
+        self.transform = Compose(transforms)
 
     def __call__(self, x: torch.Tensor) -> torch.Tensor:
         return self.transform(x)
+
+
+class BioViLTransform(ResNet50Transform):
+    # BioViL and BioViL-T do not normalize
+    def __init__(self):
+        super().__init__(
+            resize=512,
+            center_crop=448,
+            normalize=None,
+        )
+
+
+class GLoRIATransform(ResNet50Transform):
+    # replicated from GLoRIA source code and config
+    def __init__(self):
+        super().__init__(
+            resize=256,
+            center_crop=224,
+            normalize=(0.5, 0.5),
+        )
