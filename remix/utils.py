@@ -1,4 +1,5 @@
 import torch
+from torch.nn import Upsample
 from torchvision.transforms import CenterCrop, Compose, Normalize, Resize, ToTensor
 from transformers import BertTokenizer
 
@@ -32,7 +33,8 @@ class ResNet50Transform:
         *,  # enforce kwargs
         resize: int,
         center_crop: int,
-        normalize: tuple[float, float] | tuple[NORM_T, NORM_T] | None,
+        normalize: tuple[float, float] | tuple[NORM_T, NORM_T] | None = None,
+        upsample: int | None = None,
     ):
         transforms = [
             Resize(resize, antialias=True),
@@ -47,6 +49,15 @@ class ResNet50Transform:
                     (normalize[1], normalize[1], normalize[1]),
                 )
             transforms.append(Normalize(mean=normalize[0], std=normalize[1]))
+        if upsample is not None:
+            transforms.append(
+                # this is buried in the GLoRIA model forward function
+                Upsample(
+                    size=(upsample, upsample),
+                    mode="bilinear",
+                    align_corners=True,
+                )
+            )
         self.transform = Compose(transforms)
 
     def __call__(self, x: torch.Tensor) -> torch.Tensor:
@@ -59,7 +70,6 @@ class BioViLTransform(ResNet50Transform):
         super().__init__(
             resize=512,
             center_crop=448,
-            normalize=None,
         )
 
 
@@ -70,4 +80,5 @@ class GLoRIATransform(ResNet50Transform):
             resize=256,
             center_crop=224,
             normalize=(0.5, 0.5),
+            upsample=299,
         )
