@@ -42,6 +42,6 @@ data:
     one_image_per_study: True
     num_chunks: 6
     num_overlap: 0
-    mlm_probability: 0.15
+    # mlm_probability: 0.15 # set this at runtime or in script
     batch_size: 16
     num_workers: 4

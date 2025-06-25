@@ -10,7 +10,7 @@ from torch.utils.data import Dataset
 from torchvision.io import read_image
 from transformers import DataCollatorForLanguageModeling, PreTrainedTokenizer
 
-from .utils import ResNet50Transform  # isort: skip
+from .utils import BioViLTransform, GLoRIATransform  # isort: skip
 
 nltk.download("punkt")
 
@@ -96,7 +96,16 @@ class CXRDataset(Dataset):
             study_ids=df["study_id"],
             dicom_ids=df["dicom_id"],
         )
-        self.transform = ResNet50Transform()
+
+        if "mimic" in img_dir:
+            self.transform = BioViLTransform()
+        elif "chexpertplus" in img_dir:
+            self.transform = GLoRIATransform()
+        else:
+            raise ValueError(
+                f"Cannot infer from image directory path ({img_dir}) "
+                f"which transform style to use."
+            )
 
         self.notes = df[section]
         self.num_chunks = num_chunks

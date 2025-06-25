@@ -39,7 +39,6 @@ class LitData(LightningDataModule):
         batch_size: int,
         num_workers: int,
     ):
-        print("Got to LitData")
         super().__init__()
         self.save_hyperparameters()
         self.splits_df = pd.read_csv(self.hparams.splits_path)
@@ -49,7 +48,6 @@ class LitData(LightningDataModule):
         config = ImageTextMultiScaleContrasterConfig.from_pretrained(
             self.hparams.model_path,
         )
-        print("Got past config")
         self.tok = CXRTokenizer.from_pretrained(self.hparams.model_path)
         self.tok.model_max_length = config.max_position_embeddings
 
@@ -89,19 +87,16 @@ class LitModel(LightningModule):
         loss_combo: ALIGNMENT_T,
         checkpoint_path: str,
     ):
-        print("Got to LitModel")
         super().__init__()
         self.save_hyperparameters()
         config = ImageTextMultiScaleContrasterConfig.from_pretrained(
             self.hparams.model_path,
             loss_combo=self.hparams.loss_combo,
         )
-        print("Got past config")
         self.model = ImageTextMultiScaleContraster.from_pretrained(
             self.hparams.model_path,
             config=config,
         )
-        print("Got past model")
 
     def training_step(self, batch, batch_idx):
         loss = self.model(**batch)
