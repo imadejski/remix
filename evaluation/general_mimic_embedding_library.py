@@ -1,10 +1,12 @@
 import argparse
+import sys
 
 import numpy as np
 import pandas as pd
 import torch
-from models import InferenceEngine
 from tqdm import tqdm
+
+from remix.models import InferenceEngine
 
 RESIZE = 512
 CENTER_CROP_SIZE = 512
@@ -13,7 +15,7 @@ BASE_MODEL_PATH = "microsoft/BiomedVLP-CXR-BERT-specialized"
 
 # Device setup
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print("Using device:", DEVICE)
+print("Using device:", DEVICE, file=sys.stderr)
 
 
 def create_split_df(file_path, split_type):

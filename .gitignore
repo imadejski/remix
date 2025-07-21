@@ -174,3 +174,10 @@ temp/
 
 runs/
 run-*.sh
+
+# data specific directories
+data/20250707_model_evaluation_incorrect_labels
+data/20250715_model_evaluation
+
+# testing notebooks
+training/global_local_alignment_testing.ipynb

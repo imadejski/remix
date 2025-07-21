@@ -6,30 +6,24 @@ import pandas as pd
 from scipy.stats import norm
 
 
-def read_data(cosine_path, label_type="default"):
+def read_data(cosine_path, labels_path, label_type="auto"):
     """
     Reads in csvs with cosine similarity scores, ground-truth labels, and split
     """
     cosine_df = pd.read_csv(cosine_path)
+    labels_df = pd.read_csv(labels_path)
 
     if label_type == "labeled":
-        labels_df = pd.read_csv(
-            "/opt/gpudata/mimic-cxr/mimic-cxr-2.1.0-test-set-labeled.csv"
-        )
         split_df = None
     elif label_type == "combined":
-        labels_df = pd.read_csv(
-            "/opt/gpudata/imadejski/search-model/ctds-search-model/data/reports/mimic_combined_sectioned_notes_labeled.csv"
-        )
         split_df = pd.read_csv("/opt/gpudata/mimic-cxr/mimic-cxr-2.0.0-split.csv")
-    else:  # default, raw, convirt
-        labels_df = pd.read_csv("/opt/gpudata/mimic-cxr/mimic-cxr-2.0.0-chexpert.csv")
+    else:  # auto, raw, convirt
         split_df = pd.read_csv("/opt/gpudata/mimic-cxr/mimic-cxr-2.0.0-split.csv")
 
     return cosine_df, labels_df, split_df
 
 
-def filter_split_type_data(split_df, labels_df, split_type, label_type="default"):
+def filter_split_type_data(split_df, labels_df, split_type, label_type="auto"):
     """
     Filters split df so that only specified split type exists
     """
@@ -43,7 +37,7 @@ def filter_split_type_data(split_df, labels_df, split_type, label_type="default"
     return split_type_labels_df
 
 
-def transform_cosine_df(cosine_df, labels, embedding_types, label_type="default"):
+def transform_cosine_df(cosine_df, labels, embedding_types, label_type="auto"):
     """
     Transforms cosine similarity df for processing by accuracy function
     """
@@ -125,7 +119,57 @@ def aggregate_cosine(df, method: Literal["max", "mean"]):
     return aggregated_df
 
 
-def calculate_accuracy_and_top_k(
+def calculate_dcg(relevance_scores, k=None):
+    """
+    Calculate Discounted Cumulative Gain (DCG) for a list of relevance scores.
+
+    Args:
+        relevance_scores: List of relevance scores (1 for relevant, 0 for non-relevant)
+        k: If specified, only consider the first k items
+
+    Returns:
+        DCG score
+    """
+    if k is not None:
+        relevance_scores = relevance_scores[:k]
+
+    if len(relevance_scores) == 0:
+        return 0.0
+
+    dcg = relevance_scores[0]  # First item has discount factor of 1
+    for i in range(1, len(relevance_scores)):
+        dcg += relevance_scores[i] / np.log2(i + 1)
+
+    return dcg
+
+
+def calculate_ndcg(relevance_scores, k=None):
+    """
+    Calculate Normalized Discounted Cumulative Gain (NDCG).
+
+    Args:
+        relevance_scores: List of relevance scores (1 for relevant, 0 for non-relevant)
+        k: If specified, only consider the first k items
+
+    Returns:
+        NDCG score
+    """
+    if k is not None:
+        relevance_scores = relevance_scores[:k]
+
+    dcg = calculate_dcg(relevance_scores, k)
+
+    # Calculate ideal DCG (IDCG) by sorting relevance scores in descending order
+    ideal_relevance = sorted(relevance_scores, reverse=True)
+    idcg = calculate_dcg(ideal_relevance, k)
+
+    if idcg == 0:
+        return 0.0
+
+    return dcg / idcg
+
+
+def calculate_metrics(
     labels,
     n_counts,
     cosine_max,
@@ -133,13 +177,18 @@ def calculate_accuracy_and_top_k(
     split_type_labels_df,
     k_values,
 ):
+    """
+    Calculate all metrics: accuracy@n, top-k accuracy, DCG@n/NDCG@n, and DCG@k/NDCG@k
+    """
     results = {}
     top_k_results = {}
+    dcg_results = {}
 
     for label in labels:
         n = n_counts[label]
         label_results = {}
         label_results_k = {}
+        label_results_dcg = {}
 
         filtered_embedding_types = [
             "average_cosine_similarity",
@@ -160,59 +209,159 @@ def calculate_accuracy_and_top_k(
                 print(
                     f"Warning: No data available for label '{label}' and embedding '{emb}'. Skipping."
                 )
+                # Set all metrics to NaN for this combination
                 label_results[f"{emb}_max_accuracy"] = np.nan
                 label_results[f"{emb}_mean_accuracy"] = np.nan
+                label_results[f"{emb}_max_dcg_n"] = np.nan
+                label_results[f"{emb}_mean_dcg_n"] = np.nan
+                label_results[f"{emb}_max_ndcg_n"] = np.nan
+                label_results[f"{emb}_mean_ndcg_n"] = np.nan
+
                 for k in k_values:
                     label_results_k[f"{emb}_max_accuracy_top_{k}"] = np.nan
                     label_results_k[f"{emb}_mean_accuracy_top_{k}"] = np.nan
+                    label_results_dcg[f"{emb}_max_dcg_{k}"] = np.nan
+                    label_results_dcg[f"{emb}_mean_dcg_{k}"] = np.nan
+                    label_results_dcg[f"{emb}_max_ndcg_{k}"] = np.nan
+                    label_results_dcg[f"{emb}_mean_ndcg_{k}"] = np.nan
                 continue
 
-            # Adjust n to be at most the number of available rows
-            n = min(n, len(max_df), len(mean_df))
-
-            # Calculate top_n accuracy
-            top_n_max = max_df.nlargest(n, "cosine_similarity")["study_id"]
-            top_n_mean = mean_df.nlargest(n, "cosine_similarity")["study_id"]
-
+            # Get label positives
             label_positives = split_type_labels_df[split_type_labels_df[label] == 1][
                 "study_id"
             ]
 
-            # Combine the accuracy metrics with specific names for each embedding type
-            label_results[f"{emb}_max_accuracy"] = (
-                top_n_max.isin(label_positives).sum() / n if n > 0 else 0
-            )
+            # Sort by cosine similarity (descending)
+            max_df_sorted = max_df.sort_values("cosine_similarity", ascending=False)
+            mean_df_sorted = mean_df.sort_values("cosine_similarity", ascending=False)
 
-            label_results[f"{emb}_mean_accuracy"] = (
-                top_n_mean.isin(label_positives).sum() / n if n > 0 else 0
-            )
+            # Check if we have enough positive cases for meaningful metrics
+            num_positives = len(label_positives)
 
-            # Calculate top_k accuracy for each k in k_values
+            # Adjust n to be at most the number of available rows
+            n_adjusted = min(n, len(max_df_sorted), len(mean_df_sorted))
+
+            # Calculate top_n accuracy and DCG@n (precision at n positive cases)
+            if n_adjusted > 0 and num_positives > 0:
+                top_n_max = max_df_sorted.head(n_adjusted)["study_id"]
+                top_n_mean = mean_df_sorted.head(n_adjusted)["study_id"]
+
+                label_results[f"{emb}_max_accuracy"] = (
+                    top_n_max.isin(label_positives).sum() / n_adjusted
+                )
+                label_results[f"{emb}_mean_accuracy"] = (
+                    top_n_mean.isin(label_positives).sum() / n_adjusted
+                )
+
+                # DCG@n and NDCG@n calculations
+                # Create relevance vectors for top-n items
+                max_relevance_n = [
+                    1 if study_id in label_positives.values else 0
+                    for study_id in top_n_max
+                ]
+                mean_relevance_n = [
+                    1 if study_id in label_positives.values else 0
+                    for study_id in top_n_mean
+                ]
+
+                # Calculate DCG@n and NDCG@n
+                label_results[f"{emb}_max_dcg_n"] = calculate_dcg(max_relevance_n)
+                label_results[f"{emb}_mean_dcg_n"] = calculate_dcg(mean_relevance_n)
+                label_results[f"{emb}_max_ndcg_n"] = calculate_ndcg(max_relevance_n)
+                label_results[f"{emb}_mean_ndcg_n"] = calculate_ndcg(mean_relevance_n)
+            else:
+                # Set to NaN if no positive cases or no data
+                if num_positives == 0:
+                    print(
+                        f"Warning: No positive cases for label '{label}'. Setting accuracy@n and DCG@n to NaN."
+                    )
+                label_results[f"{emb}_max_accuracy"] = (
+                    np.nan if num_positives == 0 else 0
+                )
+                label_results[f"{emb}_mean_accuracy"] = (
+                    np.nan if num_positives == 0 else 0
+                )
+                label_results[f"{emb}_max_dcg_n"] = np.nan if num_positives == 0 else 0
+                label_results[f"{emb}_mean_dcg_n"] = np.nan if num_positives == 0 else 0
+                label_results[f"{emb}_max_ndcg_n"] = np.nan if num_positives == 0 else 0
+                label_results[f"{emb}_mean_ndcg_n"] = (
+                    np.nan if num_positives == 0 else 0
+                )
+
+            # Calculate top_k metrics and DCG@k for each k in k_values
             for k in k_values:
-                k = min(k, len(max_df), len(mean_df))  # Adjust k similarly
-                top_k_max = max_df.nlargest(k, "cosine_similarity")["study_id"]
-                top_k_mean = mean_df.nlargest(k, "cosine_similarity")["study_id"]
+                # Check if we have enough positive cases for meaningful top-k metrics
+                # Require at least k positive cases for meaningful metrics
+                if (
+                    num_positives >= k
+                    and len(max_df_sorted) >= k
+                    and len(mean_df_sorted) >= k
+                ):
+                    # Top-k accuracy - always use exactly k samples
+                    top_k_max = max_df_sorted.head(k)["study_id"]
+                    top_k_mean = mean_df_sorted.head(k)["study_id"]
 
-                label_results_k[f"{emb}_max_accuracy_top_{k}"] = (
-                    top_k_max.isin(label_positives).sum() / k if k > 0 else 0
-                )
-                label_results_k[f"{emb}_mean_accuracy_top_{k}"] = (
-                    top_k_mean.isin(label_positives).sum() / k if k > 0 else 0
-                )
+                    label_results_k[f"{emb}_max_accuracy_top_{k}"] = (
+                        top_k_max.isin(label_positives).sum() / k
+                    )
+                    label_results_k[f"{emb}_mean_accuracy_top_{k}"] = (
+                        top_k_mean.isin(label_positives).sum() / k
+                    )
+
+                    # DCG@k and NDCG@k calculations
+                    # Create relevance vectors for top-k items
+                    max_relevance_k = [
+                        1 if study_id in label_positives.values else 0
+                        for study_id in top_k_max
+                    ]
+                    mean_relevance_k = [
+                        1 if study_id in label_positives.values else 0
+                        for study_id in top_k_mean
+                    ]
+
+                    # Calculate DCG@k and NDCG@k
+                    label_results_dcg[f"{emb}_max_dcg_{k}"] = calculate_dcg(
+                        max_relevance_k
+                    )
+                    label_results_dcg[f"{emb}_mean_dcg_{k}"] = calculate_dcg(
+                        mean_relevance_k
+                    )
+                    label_results_dcg[f"{emb}_max_ndcg_{k}"] = calculate_ndcg(
+                        max_relevance_k
+                    )
+                    label_results_dcg[f"{emb}_mean_ndcg_{k}"] = calculate_ndcg(
+                        mean_relevance_k
+                    )
+                else:
+                    # Set to NaN if insufficient positive cases or total samples
+                    if num_positives < k:
+                        print(
+                            f"Warning: Not enough positive cases ({num_positives} < {k}) for meaningful top-{k} metrics for label '{label}'. Setting to NaN."
+                        )
+                    elif len(max_df_sorted) < k or len(mean_df_sorted) < k:
+                        print(
+                            f"Warning: Not enough total samples (max:{len(max_df_sorted)}, mean:{len(mean_df_sorted)} < {k}) for top-{k} metrics for label '{label}'. Setting to NaN."
+                        )
+
+                    label_results_k[f"{emb}_max_accuracy_top_{k}"] = np.nan
+                    label_results_k[f"{emb}_mean_accuracy_top_{k}"] = np.nan
+                    label_results_dcg[f"{emb}_max_dcg_{k}"] = np.nan
+                    label_results_dcg[f"{emb}_mean_dcg_{k}"] = np.nan
+                    label_results_dcg[f"{emb}_max_ndcg_{k}"] = np.nan
+                    label_results_dcg[f"{emb}_mean_ndcg_{k}"] = np.nan
 
         results[label] = label_results
         top_k_results[label] = label_results_k
+        dcg_results[label] = label_results_dcg
 
-    return results, top_k_results
+    return results, top_k_results, dcg_results
 
 
 def save_results(results_df, output_path):
     """
     Save results in output df.
     """
-    results_df.to_csv(
-        output_path, index=False
-    )  # Use index=False to avoid duplicate label columns
+    results_df.to_csv(output_path, index=False)
 
 
 def calculate_confidence_intervals(data):
@@ -226,7 +375,7 @@ def calculate_confidence_intervals(data):
     return mean, ci_lower, ci_upper
 
 
-def resample_and_calculate_accuracies(
+def resample_and_calculate_metrics(
     labels,
     n_counts,
     cosine_max,
@@ -236,7 +385,7 @@ def resample_and_calculate_accuracies(
     num_iterations=1000,
 ):
     """
-    Perform resampling by drawing half of the samples for each label and embedding type, and repeat for `num_iterations`.
+    Perform resampling and calculate all metrics with confidence intervals.
     """
     all_results = []
 
@@ -253,7 +402,8 @@ def resample_and_calculate_accuracies(
     for i in range(num_iterations):
         # Determine the sample size as half of the unique study IDs
         sample_size = max(1, (len(unique_study_ids) // 2))
-        print(f"Sample size: {sample_size}")
+        if i == 0:  # Only print once to avoid spam
+            print(f"Sample size: {sample_size}")
 
         # Randomly sample study IDs
         sampled_ids = np.random.choice(
@@ -277,8 +427,8 @@ def resample_and_calculate_accuracies(
             )
             continue
 
-        # Calculate accuracy for the resample
-        results, _ = calculate_accuracy_and_top_k(
+        # Calculate all metrics for the resample
+        results, top_k_results, dcg_results = calculate_metrics(
             labels,
             n_counts_sampled,
             sampled_cosine_max,
@@ -287,51 +437,59 @@ def resample_and_calculate_accuracies(
             k_values,
         )
 
-        print(f"Iteration {i} calculated")
+        if i % 100 == 0:  # Print progress every 100 iterations
+            print(f"Iteration {i} calculated")
 
-        # Store the accuracy results for each embedding type
-        for label in results:
-            for key, value in results[label].items():
-                all_results.append(
-                    {
-                        "iteration": i,
-                        "label": label,
-                        "embedding_type": key,
-                        "value": value,
-                    }
-                )
+        # Store all results for each metric type
+        all_metric_dicts = [results, top_k_results, dcg_results]
+
+        for metric_dict in all_metric_dicts:
+            for label in metric_dict:
+                for key, value in metric_dict[label].items():
+                    all_results.append(
+                        {
+                            "iteration": i,
+                            "label": label,
+                            "metric": key,
+                            "value": value,
+                        }
+                    )
 
     # Convert all results into a DataFrame
     all_results_df = pd.DataFrame(all_results)
 
-    # Calculate mean and confidence intervals
+    # Calculate mean and confidence intervals for all metrics
     mean_ci_results = []
 
+    # Get all unique metrics
+    unique_metrics = all_results_df["metric"].unique()
+
     for label in labels:
-        metrics = [
-            "average_cosine_similarity_max_accuracy",
-            "average_cosine_similarity_mean_accuracy",
-            "max_cosine_similarity_max_accuracy",
-            "max_cosine_similarity_mean_accuracy",
-        ]
-        for metric in metrics:
+        for metric in unique_metrics:
             subset = all_results_df[
                 (all_results_df["label"] == label)
-                & (all_results_df["embedding_type"] == metric)
+                & (all_results_df["metric"] == metric)
             ]
 
             if not subset.empty:
                 subset_values = pd.to_numeric(subset["value"], errors="coerce")
-                mean, ci_lower, ci_upper = calculate_confidence_intervals(subset_values)
-                mean_ci_results.append(
-                    {
-                        "label": label,
-                        "embedding_type": metric,
-                        "mean": mean,
-                        "ci_lower": ci_lower,
-                        "ci_upper": ci_upper,
-                    }
-                )
+                # Remove NaN values for calculation
+                subset_values = subset_values.dropna()
+
+                if len(subset_values) > 0:
+                    mean, ci_lower, ci_upper = calculate_confidence_intervals(
+                        subset_values
+                    )
+                    mean_ci_results.append(
+                        {
+                            "label": label,
+                            "metric": metric,
+                            "mean": mean,
+                            "ci_lower": ci_lower,
+                            "ci_upper": ci_upper,
+                            "n_samples": len(subset_values),
+                        }
+                    )
 
     mean_ci_results_df = pd.DataFrame(mean_ci_results)
 
@@ -340,7 +498,7 @@ def resample_and_calculate_accuracies(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Calculate accuracy and top-k metrics for cosine similarity data."
+        description="Calculate accuracy, top-k, DCG, and NDCG metrics for cosine similarity data."
     )
     parser.add_argument(
         "-c",
@@ -348,6 +506,12 @@ def main():
         type=str,
         required=True,
         help="Path to the cosine similarity CSV file.",
+    )
+    parser.add_argument(
+        "--labels-path",
+        type=str,
+        required=True,
+        help="Path to the ground-truth labels CSV file.",
     )
     parser.add_argument(
         "-o",
@@ -362,6 +526,12 @@ def main():
         type=str,
         required=True,
         help="Path to save the top-k accuracy results CSV file.",
+    )
+    parser.add_argument(
+        "-d",
+        "--output-dcg-results-path",
+        type=str,
+        help="Path to save the DCG/NDCG results CSV file.",
     )
     parser.add_argument(
         "-s",
@@ -381,15 +551,15 @@ def main():
         "-r",
         "--resampling",
         action="store_true",
-        help="Flag to enable resampling for accuracy calculation.",
+        help="Flag to enable resampling for metric calculation.",
     )
     parser.add_argument(
         "-l",
         "--label-type",
         type=str,
-        choices=["default", "labeled", "raw", "convirt", "combined"],
-        default="default",
-        help="Type of labels to use: default (CheXpert), labeled (test set), raw, convirt, or combined reports.",
+        choices=["auto", "labeled", "raw", "convirt", "combined"],
+        default="auto",
+        help="Type of labels to use: auto (CheXpert), labeled (test set), raw, convirt, or combined reports.",
     )
 
     args = parser.parse_args()
@@ -423,7 +593,7 @@ def main():
             "Pneumothorax",
             "Support Devices",
         ]
-    else:  # default, raw, combined
+    else:  # auto, raw, combined
         labels = [
             "Atelectasis",
             "Cardiomegaly",
@@ -454,7 +624,7 @@ def main():
         ]
     elif args.label_type == "raw":
         embedding_types = ["cosine_similarity"]  # Not used, but kept for consistency
-    else:  # default, labeled, combined
+    else:  # auto, labeled, combined
         embedding_types = [
             "cosine_similarity_1",
             "cosine_similarity_2",
@@ -465,7 +635,9 @@ def main():
         ]
 
     # Read and process data
-    cosine_df, labels_df, split_df = read_data(args.cosine_path, args.label_type)
+    cosine_df, labels_df, split_df = read_data(
+        args.cosine_path, args.labels_path, args.label_type
+    )
     split_type_labels_df = filter_split_type_data(
         split_df, labels_df, args.split_type, args.label_type
     )
@@ -480,8 +652,8 @@ def main():
     k_values = [5, 10, 20]
 
     if args.resampling:
-        # Perform resampling and calculate accuracies
-        mean_ci_results_df, all_results_df = resample_and_calculate_accuracies(
+        # Perform resampling and calculate all metrics
+        mean_ci_results_df, all_results_df = resample_and_calculate_metrics(
             labels,
             n_counts,
             cosine_max,
@@ -507,11 +679,11 @@ def main():
             ),
         )
 
-        print(f"Accuracy with resampling results saved for {args.label_type} labels")
+        print(f"All metrics with resampling results saved for {args.label_type} labels")
 
     else:
-        # Calculate accuracies without resampling
-        results, top_k_results = calculate_accuracy_and_top_k(
+        # Calculate all metrics without resampling
+        results, top_k_results, dcg_results = calculate_metrics(
             labels,
             n_counts,
             cosine_max,
@@ -529,7 +701,7 @@ def main():
         results_df.columns = ["label", "metric", "value"]
         save_results(results_df, args.output_results_path)
 
-        # Similarly for top_k_results
+        # Save top_k_results
         top_k_results_df = (
             pd.DataFrame(top_k_results)
             .T.reset_index()
@@ -538,7 +710,17 @@ def main():
         top_k_results_df.columns = ["label", "metric", "value"]
         save_results(top_k_results_df, args.output_top_k_results_path)
 
-        print(f"Accuracy results saved for {args.label_type} labels")
+        # Save DCG results if path is provided
+        if args.output_dcg_results_path:
+            dcg_results_df = (
+                pd.DataFrame(dcg_results)
+                .T.reset_index()
+                .melt(id_vars="index", var_name="metric", value_name="value")
+            )
+            dcg_results_df.columns = ["label", "metric", "value"]
+            save_results(dcg_results_df, args.output_dcg_results_path)
+
+        print(f"All metrics saved for {args.label_type} labels")
 
 
 if __name__ == "__main__":

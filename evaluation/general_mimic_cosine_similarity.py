@@ -1,15 +1,17 @@
 import argparse
+import sys
 
 import numpy as np
 import pandas as pd
 import torch
 import torch.nn.functional as F
-from models import InferenceEngine
 from tqdm import tqdm
+
+from remix.models import InferenceEngine
 
 BASE_MODEL_PATH = "microsoft/BiomedVLP-CXR-BERT-specialized"
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print("Using device:", DEVICE)
+print("Using device:", DEVICE, file=sys.stderr)
 
 
 def _get_inference_engine(model_checkpoint_path, tokenizer_path) -> InferenceEngine:
@@ -68,14 +70,19 @@ def find_cosine_similarity(img_embedding, search_query_embedding):
     Takes an image embedding and a search query embedding as torch tensors and returns the cosine
     similarity score
     Image embedding size should be ([128]) and text embedding is ([1, 128])
+    Both inputs will be reshaped to ensure consistent 2D matrix multiplication
     """
-    img_embedding_reshaped = img_embedding.reshape(1, 128)
+    # Ensure both are 2D for consistent matrix operations
+    img_embedding_reshaped = img_embedding.reshape(1, 128)  # [128] -> [1, 128]
 
-    text_embedding = search_query_embedding.mean(dim=0)
-    text_embedding = F.normalize(text_embedding, dim=0, p=2)
+    # search_query_embedding is always [1, 128] from our fixed text embedding method
+    text_embedding = F.normalize(
+        search_query_embedding, dim=1, p=2
+    )  # Normalize along feature dimension
 
-    cos_similarity = img_embedding @ text_embedding.t()
-    return cos_similarity.item()
+    # Simple matrix multiplication: [1, 128] @ [128, 1] = [1, 1]
+    cos_similarity = img_embedding_reshaped @ text_embedding.t()
+    return cos_similarity.item()  # Convert to scalar
 
 
 def convert_string_to_np(embedding_str):
