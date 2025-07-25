@@ -88,10 +88,16 @@ class ImageTextMultiScaleContraster(BertForMaskedLM):
         )
         labels = None
         if labels_global is not None:
+            dummies = torch.ones(
+                B * Lx,
+                T,
+                dtype=labels_global.dtype,
+                device=labels_global.device,
+            )
             labels = torch.concat(
                 [
                     labels_global,
-                    torch.ones(B * Lx, T, dtype=labels_global.dtype) * -100,
+                    dummies * -100,
                     # ignore local MLM ^
                 ],
             )
