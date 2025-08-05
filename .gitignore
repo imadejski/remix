@@ -178,6 +178,8 @@ run-*.sh
 # data specific directories
 data/20250707_model_evaluation_incorrect_labels
 data/20250715_model_evaluation
+data/20250728_biovil_baseline_evaluation
+data/20250804_model_evaluation_mlm_correction
 
 # testing notebooks
 training/global_local_alignment_testing.ipynb
