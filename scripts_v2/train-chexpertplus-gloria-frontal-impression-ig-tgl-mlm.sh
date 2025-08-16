@@ -11,7 +11,7 @@ else
     MLM="mlm"
 fi
 
-VERSION=$SECTION-$LOSS_COMBO-$MLM
+VERSION=$SECTION-$LOSS_COMBO-$MLM-v2
 
 python run.py fit \
 --config configs/$NAME.yaml \
