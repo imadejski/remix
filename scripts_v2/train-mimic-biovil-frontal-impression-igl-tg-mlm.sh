@@ -13,7 +13,7 @@ fi
 
 VERSION=$SECTION-$LOSS_COMBO-$MLM
 
-python train.py fit \
+python run.py fit \
 --config configs/$NAME.yaml \
 --model.checkpoint_path /opt/gpudata/remix/$NAME-$VERSION \
 --model.loss_combo $LOSS_COMBO \
