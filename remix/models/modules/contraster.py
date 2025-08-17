@@ -250,10 +250,16 @@ class LocalGlobalContrasterV2(nn.Module):
         """
         inputs must be unit vectors
         """
-        similarities = x @ x.T / self.temperature
-        non_self_pairs = 1 - torch.eye(x.shape[0], device=x.device)
-        non_self_similarities = (non_self_pairs * similarities).sum()
-        return non_self_similarities / 2  # double counted upper and lower triangles
+        assert x.dim() == 3, "Must do repulsive loss with local embeddings"
+        sims = x @ x.mT  # (B, L, H) @ (B, H, L) --> (B, L, L)
+        sims = sims / self.temperature
+
+        # minimize similarity between pairs from the same sample,
+        # but ignore self pairs i.e. x_i,j @ x_i,j.T
+        self_pairs = torch.eye(sims.shape[1], device=sims.device).expand(sims.shape)
+        non_self_pairs = 1 - self_pairs
+        non_self_sims = (non_self_pairs * sims).sum()
+        return non_self_sims / non_self_pairs.sum()
 
     def forward(
         self,
