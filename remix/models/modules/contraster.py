@@ -241,10 +241,11 @@ class LocalGlobalContrasterV2(nn.Module):
 
         # symmetric cross entropy loss
         targets = torch.arange(img_projs.shape[0]).to(img_projs.device)
-        return (
+        loss = (
             F.cross_entropy(similarities, targets)
             + F.cross_entropy(similarities.T, targets)
         ) / 2
+        return loss
 
     def self_repulsive_loss(self, x) -> torch.Tensor:
         """
@@ -252,7 +253,7 @@ class LocalGlobalContrasterV2(nn.Module):
         """
         assert x.dim() == 3, "Must do repulsive loss with local embeddings"
         sims = x @ x.mT  # (B, L, H) @ (B, H, L) --> (B, L, L)
-        sims = sims / self.temperature
+        sims = sims
 
         # minimize similarity between pairs from the same sample,
         # but ignore self pairs i.e. x_i,j @ x_i,j.T
