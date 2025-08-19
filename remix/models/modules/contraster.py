@@ -222,11 +222,15 @@ class LocalGlobalContrasterV2(nn.Module):
         *,  # enforce kwargs
         img_projs: torch.Tensor,
         txt_projs: torch.Tensor,
+        txt_local_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """
         inputs must be unit vectors of equal dimensionality
         computes symmetric contrastive loss
         """
+        if txt_local_mask is not None:
+            assert txt_projs.dim() == 3, "Can only use txt_local_mask with local text projections"  # fmt: skip
+            assert txt_local_mask.dim() == 2
 
         # averaging of local embeddings will result in non-unit vectors
         # however, simplifies cross entropy computation and intermediate similarity
@@ -234,7 +238,13 @@ class LocalGlobalContrasterV2(nn.Module):
         if img_projs.dim() == 3:
             img_projs = img_projs.mean(axis=1)
         if txt_projs.dim() == 3:
-            txt_projs = txt_projs.mean(axis=1)
+            if txt_local_mask is not None:
+                # txt_projs  # (B, L, H)
+                txt_local_mask = txt_local_mask.unsqueeze(-1)  # (B, L, 1)
+                txt_projs = (txt_projs * txt_local_mask).sum(1)  # (B, H)
+                txt_projs = txt_projs / txt_local_mask.sum(1)
+            else:
+                txt_projs = txt_projs.mean(axis=1)
 
         # temp scaling in form of BioViL paper (divide)
         similarities = img_projs @ txt_projs.T / self.temperature
@@ -247,20 +257,33 @@ class LocalGlobalContrasterV2(nn.Module):
         ) / 2
         return loss
 
-    def self_repulsive_loss(self, x) -> torch.Tensor:
+    def self_repulsive_loss(
+        self,
+        x: torch.Tensor,
+        *,  # enforce kwargs
+        local_mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
         """
         inputs must be unit vectors
         """
         assert x.dim() == 3, "Must do repulsive loss with local embeddings"
+        assert local_mask is None or local_mask.dim() == 2
         sims = x @ x.mT  # (B, L, H) @ (B, H, L) --> (B, L, L)
-        sims = sims
 
         # minimize similarity between pairs from the same sample,
         # but ignore self pairs i.e. x_i,j @ x_i,j.T
         self_pairs = torch.eye(sims.shape[1], device=sims.device).expand(sims.shape)
         non_self_pairs = 1 - self_pairs
-        non_self_sims = (non_self_pairs * sims).sum()
-        return non_self_sims / non_self_pairs.sum()
+
+        # ignore masked-out chunks if local mask is provided
+        mask = non_self_pairs
+        if local_mask is not None:
+            local_mask = local_mask.unsqueeze(-1)
+            local_mask = local_mask @ local_mask.mT
+            mask = mask * local_mask
+
+        masked_sims = (mask * sims).sum()
+        return masked_sims / mask.sum()
 
     def forward(
         self,
@@ -269,11 +292,13 @@ class LocalGlobalContrasterV2(nn.Module):
         i_global: torch.Tensor,  # (B, H_i), global image input
         t_locals: torch.Tensor,  # (B, L_t, H_t) local text input
         i_locals: torch.Tensor,  # (B, L_i, H_i) local image input
+        t_local_mask: torch.Tensor,  # (B, L_t) local text mask
     ) -> torch.Tensor:
         assert t_global.dim() == 2, "Global text embedding is not 2 dimensional"
         assert i_global.dim() == 2, "Global image embedding is not 2 dimensional"
         assert t_locals.dim() == 3, "Local text embedding is not 3 dimensional"
         assert i_locals.dim() == 3, "Local image embedding is not 3 dimensional"  # image locals not flattened before contraster? # fmt: skip
+        assert t_local_mask.dim() == 2
 
         t_global = self.dropout(t_global)
         i_global = self.dropout(i_global)

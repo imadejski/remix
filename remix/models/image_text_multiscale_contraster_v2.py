@@ -67,6 +67,7 @@ class ImageTextMultiScaleContrasterV2(BertForMaskedLM):
         labels_global: torch.Tensor | None = None,  # (B, T)
         input_ids_locals: torch.Tensor,  # (B, Lx, T)
         attention_mask_locals: torch.Tensor,  # (B, Lx, T)
+        local_mask: torch.Tensor,  # (B, Lx)
         images: torch.Tensor,  # (B, C, Wh, Ww),
     ) -> torch.Tensor:
         B, Lx, T = input_ids_locals.shape
@@ -120,6 +121,7 @@ class ImageTextMultiScaleContrasterV2(BertForMaskedLM):
         contrastive_loss = self.contraster(
             t_global=text_embed_global,
             t_locals=text_embed_locals,
+            t_local_mask=local_mask,
             i_global=image_embed_global,
             i_locals=image_embed_locals,
         )
