@@ -15,6 +15,8 @@ from remix.models import (
     ALIGNMENT_T,
     ImageTextMultiScaleContraster,
     ImageTextMultiScaleContrasterConfig,
+    ImageTextMultiScaleContrasterV2,
+    ImageTextMultiScaleContrasterV2Config,
 )
 from remix.utils import CXRTokenizer
 
@@ -45,6 +47,7 @@ class LitData(LightningDataModule):
         self.notes_df = pd.read_csv(self.hparams.notes_path)
         self.metadata_df = pd.read_csv(self.hparams.metadata_path)
 
+        # does not matter if v1 or v2, does not change max_position_embeddings
         config = ImageTextMultiScaleContrasterConfig.from_pretrained(
             self.hparams.model_path,
         )
@@ -86,14 +89,20 @@ class LitModel(LightningModule):
         model_path: str,
         loss_combo: ALIGNMENT_T,
         checkpoint_path: str,
+        use_v2: bool = False,
     ):
         super().__init__()
         self.save_hyperparameters()
-        config = ImageTextMultiScaleContrasterConfig.from_pretrained(
+        config_cls = ImageTextMultiScaleContrasterConfig
+        model_cls = ImageTextMultiScaleContraster
+        if self.hparams.use_v2:
+            config_cls = ImageTextMultiScaleContrasterV2Config
+            model_cls = ImageTextMultiScaleContrasterV2
+        config = config_cls.from_pretrained(
             self.hparams.model_path,
             loss_combo=self.hparams.loss_combo,
         )
-        self.model = ImageTextMultiScaleContraster.from_pretrained(
+        self.model = model_cls.from_pretrained(
             self.hparams.model_path,
             config=config,
         )

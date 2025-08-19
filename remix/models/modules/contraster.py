@@ -51,6 +51,8 @@ class LocalGlobalContraster(nn.Module):
     * contraster_i_size: int = input dimension for i (image)
     * projection_size: int = contrastive dimension
     * contraster_temperature: float = temperature parameter (scalar)
+    * avg_patches_after_proj: bool = if True, projected global image embedding is the average of the projected local patch embeddings
+    * loss_combo: Literal["ig_tg", "ig_tgl", "igl_tg", "igl_tgl"] = contrastive pattern
     """
 
     def __init__(self, config: PretrainedConfig):
@@ -106,14 +108,12 @@ class LocalGlobalContraster(nn.Module):
         t_global: torch.Tensor,  # (B, H_t), global text input
         i_global: torch.Tensor,  # (B, H_i), global image input
         t_locals: torch.Tensor,  # (B, L_t, H_t) local text input
-        i_locals: torch.Tensor,  # (B, L_i, H_i) or (B, L_i, W_i, H_i), local image input
+        i_locals: torch.Tensor,  # (B, L_i, H_i) local image input
     ) -> torch.Tensor:
         assert t_global.dim() == 2, "Global text embedding is not 2 dimensional"
         assert i_global.dim() == 2, "Global image embedding is not 2 dimensional"
         assert t_locals.dim() == 3, "Local text embedding is not 3 dimensional"
-        assert (
-            i_locals.dim() == 3
-        ), "Local image embedding is not 3 dimensional"  # image locals flattened before contraster
+        assert i_locals.dim() == 3, "Local image embedding is not 3 dimensional"  # image locals not flattened before contraster? # fmt: skip
 
         t_global = self.dropout(t_global)
         t_locals = self.dropout(t_locals)
@@ -170,5 +170,148 @@ class LocalGlobalContraster(nn.Module):
             ) / 2
         else:
             raise ValueError("loss_combo is not defined")
+
+        return loss
+
+
+def make_mlp(
+    *,  # enforce kwargs
+    input_size: int,
+    output_size: int,
+    depth: int,
+) -> nn.Sequential:
+    assert depth > 0
+    layers = [nn.Linear(input_size, output_size)]
+    layers += [nn.Linear(output_size, output_size) for _ in range(depth - 1)]
+    return nn.Sequential(*layers)
+
+
+class LocalGlobalContrasterV2(nn.Module):
+    """
+    Models which use this module should include the following in their config:
+    * contraster_dropout: float = dropout rate
+    * contraster_t_size: int = input dimension for t (text)
+    * contraster_i_size: int = input dimension for i (image)
+    * projection_size: int = contrastive dimension
+    * projection_depth: int = depth of MLP projectors
+    * loss_combo: Literal["ig_tg", "ig_tgl", "igl_tg", "igl_tgl"] = contrastive pattern
+    """
+
+    def __init__(self, config: PretrainedConfig):
+        super().__init__()
+        self.config = config
+        self.dropout = nn.Dropout(config.contraster_dropout)
+        self.proj_t = make_mlp(
+            input_size=config.contraster_t_size,
+            output_size=config.projection_size,
+            depth=config.projection_depth,
+        )
+        self.proj_i = make_mlp(
+            input_size=config.contraster_i_size,
+            output_size=config.projection_size,
+            depth=config.projection_depth,
+        )
+
+        # initial temp from BioViL paper
+        # learnable temp from CLIP paper
+        self.temperature = nn.Parameter(torch.tensor(0.5), requires_grad=True)
+        self.loss_combo = config.loss_combo
+
+    def contrastive_loss(
+        self,
+        *,  # enforce kwargs
+        img_projs: torch.Tensor,
+        txt_projs: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        inputs must be unit vectors of equal dimensionality
+        computes symmetric contrastive loss
+        """
+
+        # averaging of local embeddings will result in non-unit vectors
+        # however, simplifies cross entropy computation and intermediate similarity
+        # matrix can be thought of as average of pairwise cosine similarities
+        if img_projs.dim() == 3:
+            img_projs = img_projs.mean(axis=1)
+        if txt_projs.dim() == 3:
+            txt_projs = txt_projs.mean(axis=1)
+
+        # temp scaling in form of BioViL paper (divide)
+        similarities = img_projs @ txt_projs.T / self.temperature
+
+        # symmetric cross entropy loss
+        targets = torch.arange(img_projs.shape[0]).to(img_projs.device)
+        loss = (
+            F.cross_entropy(similarities, targets)
+            + F.cross_entropy(similarities.T, targets)
+        ) / 2
+        return loss
+
+    def self_repulsive_loss(self, x) -> torch.Tensor:
+        """
+        inputs must be unit vectors
+        """
+        assert x.dim() == 3, "Must do repulsive loss with local embeddings"
+        sims = x @ x.mT  # (B, L, H) @ (B, H, L) --> (B, L, L)
+        sims = sims
+
+        # minimize similarity between pairs from the same sample,
+        # but ignore self pairs i.e. x_i,j @ x_i,j.T
+        self_pairs = torch.eye(sims.shape[1], device=sims.device).expand(sims.shape)
+        non_self_pairs = 1 - self_pairs
+        non_self_sims = (non_self_pairs * sims).sum()
+        return non_self_sims / non_self_pairs.sum()
+
+    def forward(
+        self,
+        *,  # enforce kwargs
+        t_global: torch.Tensor,  # (B, H_t), global text input
+        i_global: torch.Tensor,  # (B, H_i), global image input
+        t_locals: torch.Tensor,  # (B, L_t, H_t) local text input
+        i_locals: torch.Tensor,  # (B, L_i, H_i) local image input
+    ) -> torch.Tensor:
+        assert t_global.dim() == 2, "Global text embedding is not 2 dimensional"
+        assert i_global.dim() == 2, "Global image embedding is not 2 dimensional"
+        assert t_locals.dim() == 3, "Local text embedding is not 3 dimensional"
+        assert i_locals.dim() == 3, "Local image embedding is not 3 dimensional"  # image locals not flattened before contraster? # fmt: skip
+
+        t_global = self.dropout(t_global)
+        i_global = self.dropout(i_global)
+        t_locals = self.dropout(t_locals)
+        i_locals = self.dropout(i_locals)
+
+        t_global = self.proj_t(t_global)
+        i_global = self.proj_i(i_global)
+        t_locals = self.proj_t(t_locals)
+        i_locals = self.proj_i(i_locals)
+
+        t_global = F.normalize(t_global, dim=-1)
+        i_global = F.normalize(i_global, dim=-1)
+        t_locals = F.normalize(t_locals, dim=-1)
+        i_locals = F.normalize(i_locals, dim=-1)
+
+        if self.loss_combo == "ig_tg":
+            loss = self.contrastive_loss(img_projs=i_global, txt_projs=t_global)
+        elif self.loss_combo == "igl_tg":
+            loss = (
+                self.contrastive_loss(img_projs=i_global, txt_projs=t_global)
+                + self.contrastive_loss(img_projs=i_locals, txt_projs=t_global)
+            ) / 2 + self.self_repulsive_loss(i_locals)
+        elif self.loss_combo == "ig_tgl":
+            loss = (
+                self.contrastive_loss(img_projs=i_global, txt_projs=t_global)
+                + self.contrastive_loss(img_projs=i_global, txt_projs=t_locals)
+            ) / 2 + self.self_repulsive_loss(t_locals)
+        elif self.loss_combo == "igl_tgl":
+            loss = (
+                self.contrastive_loss(img_projs=i_global, txt_projs=t_global)
+                + self.contrastive_loss(img_projs=i_global, txt_projs=t_locals)
+                + self.contrastive_loss(img_projs=i_locals, txt_projs=t_global)
+                + self.contrastive_loss(img_projs=i_locals, txt_projs=t_locals)
+            ) / 4 + (
+                self.self_repulsive_loss(i_locals) + self.self_repulsive_loss(t_locals)
+            ) / 2
+        else:
+            raise ValueError(f"Unknown loss_combo ({self.loss_combo})")
 
         return loss
