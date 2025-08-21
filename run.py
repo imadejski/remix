@@ -35,11 +35,12 @@ class LitData(LightningDataModule):
         metadata_path: str,
         frontal_only: bool,
         one_image_per_study: bool,
-        num_chunks: int,
-        num_overlap: int,
         mlm_probability: float,
         batch_size: int,
         num_workers: int,
+        num_chunks: int | None = None,
+        num_overlap: int | None = None,
+        max_chunks: int | None = None,
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -68,6 +69,7 @@ class LitData(LightningDataModule):
                 one_image_per_study=self.hparams.one_image_per_study,
                 num_chunks=self.hparams.num_chunks,
                 num_overlap=self.hparams.num_overlap,
+                max_chunks=self.hparams.max_chunks,
                 text_tokenizer=self.tok,
                 mlm_probability=self.hparams.mlm_probability,
             )
