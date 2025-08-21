@@ -72,9 +72,17 @@ class ImageTextMultiScaleContraster(BertForMaskedLM):
         labels_global: torch.Tensor | None = None,  # (B, T)
         input_ids_locals: torch.Tensor,  # (B, Lx, T)
         attention_mask_locals: torch.Tensor,  # (B, Lx, T)
+        local_mask: torch.Tensor,  # (B, Lx)
         images: torch.Tensor,  # (B, C, Wh, Ww),
     ) -> torch.Tensor:
         B, Lx, T = input_ids_locals.shape
+
+        assert local_mask.sum() != B * Lx, (
+            "jagged locals (via local_mask) are not supported in v1, "
+            "either revert to using num_chunks or set max_chunks such that "
+            "all samples maximally fill max_chunks"
+        )
+
         input_ids = torch.concat(
             [
                 input_ids_global,
