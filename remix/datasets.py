@@ -151,11 +151,9 @@ class CXRDataset(Dataset):
         input_ids_locals = chunks_tok["input_ids"]
 
         if self.masker is not None:
+            # only do MLM on global
             input_ids_global, labels_global = self.masker.torch_mask_tokens(
                 input_ids_global,
-            )
-            input_ids_locals, labels_locals = self.masker.torch_mask_tokens(
-                input_ids_locals,
             )
 
         ret = {
@@ -168,7 +166,6 @@ class CXRDataset(Dataset):
 
         if self.masker is not None:
             ret["labels_global"] = labels_global[0]
-            ret["labels_locals"] = labels_locals
 
         return ret
 

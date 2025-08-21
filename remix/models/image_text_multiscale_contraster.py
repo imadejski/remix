@@ -72,14 +72,8 @@ class ImageTextMultiScaleContraster(BertForMaskedLM):
         labels_global: torch.Tensor | None = None,  # (B, T)
         input_ids_locals: torch.Tensor,  # (B, Lx, T)
         attention_mask_locals: torch.Tensor,  # (B, Lx, T)
-        labels_locals: torch.Tensor | None = None,  # (B, Lx, T)
         images: torch.Tensor,  # (B, C, Wh, Ww),
     ) -> torch.Tensor:
-        if (labels_global is None) != (labels_locals is None):
-            raise ValueError(
-                "Global and locals must both be either provided or omitted"
-            )
-
         B, Lx, T = input_ids_locals.shape
         input_ids = torch.concat(
             [
@@ -94,11 +88,18 @@ class ImageTextMultiScaleContraster(BertForMaskedLM):
             ]
         )
         labels = None
-        if labels_global is not None and labels_locals is not None:
+        if labels_global is not None:
+            dummies = torch.ones(
+                B * Lx,
+                T,
+                dtype=labels_global.dtype,
+                device=labels_global.device,
+            )
             labels = torch.concat(
                 [
                     labels_global,
-                    labels_locals.view(-1, T),
+                    dummies * -100,
+                    # ignore local MLM ^
                 ],
             )
         bert_mlm_out = super().forward(

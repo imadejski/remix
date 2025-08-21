@@ -34,10 +34,10 @@ data:
     model_path: "/opt/gpudata/remix/gloria_chexpert_resnet50.ckpt" # this is GLoRIA, code will use the right tokenizer
     img_dir: "/opt/gpudata/chexpertplus/PNG"
     img_ext: ".png"
-    splits_path: "/opt/gpudata/remix/chexpertplus-split.csv"
-    notes_path: "/opt/gpudata/remix/chexpertplus-report.csv"
+    splits_path: "/opt/gpudata/chexpertplus/split.csv"
+    notes_path: "/opt/gpudata/chexpertplus/report.csv"
     # section: "" # set this at runtime or in script
-    metadata_path: "/opt/gpudata/remix/chexpertplus-metadata.csv"
+    metadata_path: "/opt/gpudata/chexpertplus/metadata.csv"
     frontal_only: True
     one_image_per_study: True
     num_chunks: 6
