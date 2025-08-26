@@ -1,9 +1,13 @@
+import sys
 from collections import OrderedDict
 from typing import Literal
 
 import torch
+import torch.nn.functional as F
+from PIL import Image
 from transformers import BertConfig, BertForMaskedLM
 
+from ..utils import BioViLTransform, CXRTokenizer, GLoRIATransform, ResNet50Transform
 from .modules import LocalGlobalContrasterV2, ResNet50Encoder
 
 ALIGNMENT_T = Literal[
@@ -185,3 +189,107 @@ class ImageTextMultiScaleContrasterV2(BertForMaskedLM):
         for k in incompatible_keys.unexpected_keys:
             print(k)
         print()
+
+
+class InferenceEngineV2:
+    def __init__(self, model_checkpoint: str):
+        print(
+            "Using v2 inference engine",
+            file=sys.stderr,
+        )
+        self.config = ImageTextMultiScaleContrasterV2Config.from_pretrained(
+            model_checkpoint
+        )
+        self.model = ImageTextMultiScaleContrasterV2.from_pretrained(
+            model_checkpoint, config=self.config
+        )
+        self.transform = self._infer_transform_type(model_checkpoint)
+        self.tokenizer = CXRTokenizer.from_pretrained(model_checkpoint)
+        self.tokenizer.model_max_length = self.config.max_position_embeddings
+
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.model.eval().to(self.device)
+
+    def _infer_transform_type(self, model_checkpoint: str) -> ResNet50Transform:
+        if "gloria" in model_checkpoint:
+            print(
+                "Using GLoRIA transform: resize=256, center_crop=224, normalize=(0.5, 0.5), upsample=299",
+                file=sys.stderr,
+            )
+            return GLoRIATransform()
+        elif "biovil" in model_checkpoint:
+            print(
+                "Using BioViL transform: resize=512, center_crop=448, no normalization, no upsample",
+                file=sys.stderr,
+            )
+            return BioViLTransform()
+        else:
+            raise ValueError(
+                f"Cannot infer transform type for model at: {model_checkpoint}"
+            )
+
+    def get_image_embed(self, image_path: str) -> torch.Tensor:
+        image = Image.open(image_path)
+        assert image.mode == "L"  # greyscale
+
+        image_tensor = self.transform(image).to(self.device)  #  (C, Wh, Ww)
+        assert image_tensor.dim() == 3
+
+        with torch.inference_mode():
+            # custom resnet implementation requires 4D tensor, 0th batch dim
+            _, global_emb = self.model.resnet(image_tensor.unsqueeze(0))
+
+        global_emb = global_emb.squeeze(0)  # (H,)
+
+        return global_emb
+
+    def get_image_projection(
+        self,
+        *,  # enforce kwargs
+        image_path: str,
+        normalize: bool = True,
+    ) -> torch.Tensor:
+        global_emb = self.get_image_embed(image_path)
+
+        with torch.inference_mode():
+            global_proj = self.model.contraster.proj_i(global_emb)  # (H',)
+
+        if normalize:
+            global_proj = F.normalize(global_proj, dim=-1)
+
+        return global_proj
+
+    def get_text_embed(self, text: str) -> torch.Tensor:
+        ret = self.tokenizer(
+            text=text,
+            return_tensors="pt",
+            padding="longest",  # pad to longest in sequence (no effect with single string...)
+            truncation=True,  # but truncate to max model length
+        )
+        ret = {k: v.to(self.device) for k, v in ret.items()}
+
+        with torch.inference_mode():
+            outputs = self.model.bert(**ret)
+
+        # T is sequence length, H is hidden dimension
+        last_hidden_states = outputs.hidden_states[-1].squeeze(0)  # (T, H)
+
+        # use 0th token of text sequence ([CLS] token embedding)
+        emb = last_hidden_states[0]  # (H,)
+        return emb
+
+    def get_text_projection(
+        self,
+        *,  # enforce kwargs
+        text: str,
+        normalize: bool = True,
+    ) -> torch.Tensor:
+        emb = self.get_text_embed(text)
+
+        with torch.inference_mode():
+            proj = self.model.contraster.proj_t(emb)  # (H',)
+
+        if normalize:
+            proj = F.normalize(proj, dim=-1)
+
+        return proj

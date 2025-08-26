@@ -12,8 +12,6 @@ from transformers import DataCollatorForLanguageModeling, PreTrainedTokenizer
 
 from .utils import BioViLTransform, GLoRIATransform  # isort: skip
 
-nltk.download("punkt")
-
 
 SECTION_T = Literal["findings", "impression"]
 SPLIT_T = Literal["train", "validate", "test"]
@@ -74,27 +72,16 @@ class CXRDataset(Dataset):
         else:
             raise ValueError("must provide one of max_chunks or num_chunks+num_overlap")
 
-        # fmt: off
-        notes_df = notes_df[
-            (
-                (notes_df[section].notna()) &
-                (notes_df[section].str.strip() != "")
-            )
-        ]
-        # fmt: on
-        splits_df = splits_df[splits_df["split"] == split]
-        views = FRONTAL_VIEWS if frontal_only else RANKED_VIEWS
-        view_order = {v: i for i, v in enumerate(views)}
-        metadata_df = metadata_df[metadata_df["ViewPosition"].isin(view_order)].copy()
-        metadata_df["ViewPosition"] = metadata_df["ViewPosition"].replace(view_order)
-        metadata_df = metadata_df.sort_values(["study_id", "ViewPosition", "dicom_id"])
-        if one_image_per_study:
-            metadata_df = metadata_df.drop_duplicates("study_id", keep="first")
-        df = (
-            metadata_df[["subject_id", "study_id", "dicom_id"]]
-            .merge(notes_df[["study_id", section]], on="study_id")
-            .merge(splits_df[["dicom_id", "study_id"]])
-            .sort_values(["subject_id", "study_id", "dicom_id"])
+        nltk.download("punkt")
+
+        df = get_merged_df(
+            notes_df=notes_df,
+            splits_df=splits_df,
+            metadata_df=metadata_df,
+            section=section,
+            split=split,
+            frontal_only=frontal_only,
+            one_image_per_study=one_image_per_study,
         )
 
         self.image_paths = get_image_paths(
@@ -327,3 +314,39 @@ def get_image_paths(
             f"dataset style to use for getting image paths."
         )
     return image_paths
+
+
+def get_merged_df(
+    *,  # enforce kwargs
+    notes_df: pd.DataFrame | None = None,
+    splits_df: pd.DataFrame,
+    metadata_df: pd.DataFrame,
+    section: str | None = None,
+    split: str,
+    frontal_only: bool,
+    one_image_per_study: bool,
+) -> pd.DataFrame:
+    if notes_df is not None or section is not None:
+        assert notes_df is not None and section is not None, "Must provide both notes_df and section or neither"  # fmt: skip
+        # fmt: off
+        notes_df = notes_df[
+            (
+                (notes_df[section].notna()) &
+                (notes_df[section].str.strip() != "")
+            )
+        ]
+        # fmt: on
+    splits_df = splits_df[splits_df["split"] == split]
+    views = FRONTAL_VIEWS if frontal_only else RANKED_VIEWS
+    view_order = {v: i for i, v in enumerate(views)}
+    metadata_df = metadata_df[metadata_df["ViewPosition"].isin(view_order)].copy()
+    metadata_df["ViewPosition"] = metadata_df["ViewPosition"].replace(view_order)
+    metadata_df = metadata_df.sort_values(["study_id", "ViewPosition", "dicom_id"])
+    if one_image_per_study:
+        metadata_df = metadata_df.drop_duplicates("study_id", keep="first")
+    df = metadata_df[["subject_id", "study_id", "dicom_id"]]
+    if notes_df is not None:
+        df = df.merge(notes_df[["study_id", section]], on="study_id")
+    df = df.merge(splits_df[["dicom_id", "study_id"]])
+    df = df.sort_values(["subject_id", "study_id", "dicom_id"])
+    return df

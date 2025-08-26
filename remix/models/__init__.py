@@ -7,4 +7,5 @@ from .image_text_multiscale_contraster import (
 from .image_text_multiscale_contraster_v2 import (
     ImageTextMultiScaleContrasterV2,
     ImageTextMultiScaleContrasterV2Config,
+    InferenceEngineV2,
 )

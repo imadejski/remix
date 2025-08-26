@@ -10,8 +10,10 @@ class CXRTokenizer(BertTokenizer):
     @classmethod
     def from_pretrained(cls, pretrained_model_name_or_path, **kwargs):
         temp = pretrained_model_name_or_path
-        if "gloria_chexpert_resnet50.ckpt" in pretrained_model_name_or_path:
+        if "gloria" in pretrained_model_name_or_path:
             temp = "emilyalsentzer/Bio_ClinicalBERT"
+        elif "biovil" in pretrained_model_name_or_path:
+            temp = "microsoft/BiomedVLP-CXR-BERT-specialized"
         return super().from_pretrained(temp, **kwargs)
 
 
