@@ -17,16 +17,27 @@ SPLIT_TYPE="test"
 LABEL_TYPE="auto"
 NUM_ITERATIONS=1000
 
-# BioViL model configurations array (MIMIC-trained models)
-declare -a MODELS=(
-    "mimic-biovil-frontal-impression-igl_tgl-mlm"
-    "mimic-biovil-frontal-impression-igl_tgl-no-mlm"
-    "mimic-biovil-frontal-impression-igl_tg-mlm"
-    "mimic-biovil-frontal-impression-igl_tg-no-mlm"
-    "mimic-biovil-frontal-impression-ig_tgl-mlm"
-    "mimic-biovil-frontal-impression-ig_tgl-no-mlm"
-    "mimic-biovil-frontal-impression-ig_tg-mlm"
-    "mimic-biovil-frontal-impression-ig_tg-no-mlm"
+# Checkpoint groups and their model lists
+# Each index i in CHECKPOINT_GROUP_DIRS corresponds to a space-delimited string of models in CHECKPOINT_GROUP_MODELS[i]
+declare -a CHECKPOINT_GROUP_DIRS=(
+    "/opt/gpudata/remix/v2"
+    "/opt/gpudata/remix/sent-chunk"
+    "/opt/gpudata/remix/unscaled"
+    "/opt/gpudata/remix/scaled"
+    "/opt/gpudata/remix/no-temp"
+)
+
+declare -a CHECKPOINT_GROUP_MODELS=(
+    # /opt/gpudata/remix/v2
+    "mimic-biovil-frontal-impression-ig_tg-mlm-v2 mimic-biovil-frontal-impression-ig_tg-no-mlm-v2"
+    # /opt/gpudata/remix/sent-chunk
+    "mimic-biovil-frontal-impression-ig_tgl-mlm-v3 mimic-biovil-frontal-impression-ig_tgl-no-mlm-v3"
+    # /opt/gpudata/remix/unscaled
+    "mimic-biovil-frontal-impression-ig_tgl-mlm-v2 mimic-biovil-frontal-impression-ig_tgl-no-mlm-v2"
+    # /opt/gpudata/remix/scaled
+    "mimic-biovil-frontal-impression-ig_tgl-mlm-v2 mimic-biovil-frontal-impression-ig_tgl-no-mlm-v2"
+    # /opt/gpudata/remix/no-temp
+    "mimic-biovil-frontal-impression-ig_tgl-mlm-v2 mimic-biovil-frontal-impression-ig_tgl-no-mlm-v2"
 )
 
 # Function to log with timestamp
@@ -37,9 +48,10 @@ log() {
 # Function to find model checkpoint path
 find_model_checkpoint() {
     local model_name="$1"
+    local checkpoints_base_dir="$2"
 
     # Standard path for Hugging Face format models
-    local checkpoint_path="${MODEL_CHECKPOINTS_DIR}/${model_name}"
+    local checkpoint_path="${checkpoints_base_dir}/${model_name}"
 
     # Check if it's a directory with Hugging Face model files
     if [ -d "$checkpoint_path" ]; then
@@ -215,19 +227,21 @@ run_accuracy_no_resample_script() {
 # Function to process a single model
 process_model() {
     local model_name="$1"
+    local group_output_dir="$2"
+    local checkpoints_base_dir="$3"
 
     log "=================================================="
     log "Processing model: $model_name"
     log "=================================================="
 
-    # Create model directory
-    local model_dir="${BASE_DIR}/${model_name}"
+    # Create model directory grouped under the checkpoint directory name
+    local model_dir="${group_output_dir}/${model_name}"
     mkdir -p "$model_dir"
     log "Created/verified directory: $model_dir"
 
     # Find model checkpoint
     local model_checkpoint
-    model_checkpoint=$(find_model_checkpoint "$model_name")
+    model_checkpoint=$(find_model_checkpoint "$model_name" "$checkpoints_base_dir")
 
     if [ "$model_checkpoint" == "CHECKPOINT_NOT_FOUND" ]; then
         log "✗ Skipping $model_name: checkpoint not found"
@@ -273,12 +287,19 @@ main() {
     log "Starting BioViL model evaluation process on MIMIC data with impression labels..."
     log "Base directory: $BASE_DIR"
     log "Evaluation scripts directory: $EVAL_SCRIPTS_DIR"
-    log "Model checkpoints directory: $MODEL_CHECKPOINTS_DIR"
+    log "Checkpoint groups: ${#CHECKPOINT_GROUP_DIRS[@]}"
     log "Labels file: $LABELS_PATH"
     log "Split type: $SPLIT_TYPE"
     log "Label type: $LABEL_TYPE"
     log "Number of iterations: $NUM_ITERATIONS"
-    log "Total BioViL models to process: ${#MODELS[@]}"
+    # Compute total models across groups
+    local total_models=0
+    for models in "${CHECKPOINT_GROUP_MODELS[@]}"; do
+        # shellcheck disable=SC2086
+        set -- $models
+        total_models=$(( total_models + $# ))
+    done
+    log "Total BioViL models to process: $total_models"
 
     # Create base directory if it doesn't exist
     mkdir -p "$BASE_DIR"
@@ -288,14 +309,24 @@ main() {
     local successful_models=()
     local failed_models=()
 
-    # Process each model
-    for model in "${MODELS[@]}"; do
-        if process_model "$model"; then
-            successful_models+=("$model")
-        else
-            failed_models+=("$model")
-        fi
-        log "--------------------"
+    # Process each group and its models
+    for idx in "${!CHECKPOINT_GROUP_DIRS[@]}"; do
+        local checkpoints_base_dir="${CHECKPOINT_GROUP_DIRS[$idx]}"
+        local group_name
+        group_name=$(basename "$checkpoints_base_dir")
+        local group_output_dir="${BASE_DIR}/${group_name}"
+        mkdir -p "$group_output_dir"
+        log "Group: $group_name (checkpoint dir: $checkpoints_base_dir)"
+        # shellcheck disable=SC2206
+        local group_models=( ${CHECKPOINT_GROUP_MODELS[$idx]} )
+        for model in "${group_models[@]}"; do
+            if process_model "$model" "$group_output_dir" "$checkpoints_base_dir"; then
+                successful_models+=("$model")
+            else
+                failed_models+=("$model")
+            fi
+            log "--------------------"
+        done
     done
 
     # Summary
@@ -331,8 +362,8 @@ show_help() {
     echo "  --label-type TYPE     Set the label type (default: auto)"
     echo "  --iterations NUM      Set number of resampling iterations (default: 1000)"
     echo "  --labels-path PATH    Set custom labels file path (default: $LABELS_PATH)"
-    echo "  --model MODEL_NAME    Process only a specific model"
-    echo "  --list-models         List all available BioViL models"
+    echo "  --model MODEL_NAME    Process only a specific model (searched across all groups)"
+    echo "  --list-models         List all available BioViL models by checkpoint group"
     echo "  --help               Show this help message"
     echo ""
     echo "Examples:"
@@ -367,9 +398,17 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         --list-models)
-            echo "Available BioViL models:"
-            for model in "${MODELS[@]}"; do
-                echo "  - $model"
+            echo "Available BioViL models by checkpoint group:"
+            for idx in "${!CHECKPOINT_GROUP_DIRS[@]}"; do
+                group_dir="${CHECKPOINT_GROUP_DIRS[$idx]}"
+                group_name=$(basename "$group_dir")
+                echo "- Group: $group_name ($group_dir)"
+                # shellcheck disable=SC2206
+                group_models=( ${CHECKPOINT_GROUP_MODELS[$idx]} )
+                for model in "${group_models[@]}"; do
+                    echo "  - $model"
+                done
+                echo ""
             done
             exit 0
             ;;
@@ -385,18 +424,29 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# If single model specified, process only that model
+# If single model specified, process only that model (search across all groups)
 if [ -n "$SINGLE_MODEL" ]; then
-    # Check if model is in the list
-    if [[ " ${MODELS[@]} " =~ " ${SINGLE_MODEL} " ]]; then
-        log "Processing single model: $SINGLE_MODEL"
-        mkdir -p "$BASE_DIR"
-        cd "$BASE_DIR"
-        process_model "$SINGLE_MODEL"
-        exit $?
-    else
-        log "Error: Model '$SINGLE_MODEL' not found in the BioViL model list"
-        log "Use --list-models to see available BioViL models"
+    mkdir -p "$BASE_DIR"
+    cd "$BASE_DIR"
+    found_model=0
+    for idx in "${!CHECKPOINT_GROUP_DIRS[@]}"; do
+        # shellcheck disable=SC2206
+        group_models=( ${CHECKPOINT_GROUP_MODELS[$idx]} )
+        for model in "${group_models[@]}"; do
+            if [ "$model" == "$SINGLE_MODEL" ]; then
+                checkpoints_base_dir="${CHECKPOINT_GROUP_DIRS[$idx]}"
+                group_name=$(basename "$checkpoints_base_dir")
+                group_output_dir="${BASE_DIR}/${group_name}"
+                mkdir -p "$group_output_dir"
+                log "Processing single model: $SINGLE_MODEL (group: $group_name)"
+                process_model "$SINGLE_MODEL" "$group_output_dir" "$checkpoints_base_dir"
+                exit $?
+            fi
+        done
+    done
+    if [ $found_model -eq 0 ]; then
+        log "Error: Model '$SINGLE_MODEL' not found in any checkpoint group"
+        log "Use --list-models to see available BioViL models by group"
         exit 1
     fi
 fi

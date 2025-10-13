@@ -6,7 +6,9 @@ import pandas as pd
 from scipy.stats import norm
 
 
-def read_data(cosine_path, labels_path, label_type="auto"):
+def read_data(
+    cosine_path, labels_path, label_type="auto", split_file_path: str | None = None
+):
     """
     Reads in csvs with cosine similarity scores, ground-truth labels, and split
     """
@@ -15,6 +17,8 @@ def read_data(cosine_path, labels_path, label_type="auto"):
 
     if label_type == "labeled":
         split_df = None
+    elif split_file_path is not None:
+        split_df = pd.read_csv(split_file_path)
     elif label_type == "combined":
         split_df = pd.read_csv("/opt/gpudata/mimic-cxr/mimic-cxr-2.0.0-split.csv")
     else:  # auto, raw, convirt
@@ -27,8 +31,8 @@ def filter_split_type_data(split_df, labels_df, split_type, label_type="auto"):
     """
     Filters split df so that only specified split type exists
     """
-    if label_type == "labeled":
-        return labels_df  # No filtering needed for labeled test set
+    if label_type == "labeled" or split_df is None:
+        return labels_df  # No filtering needed when split file not provided
 
     split_type_df = split_df[split_df["split"] == split_type]
     split_type_study_ids = split_type_df["study_id"].unique()
@@ -80,6 +84,25 @@ def transform_cosine_df(cosine_df, labels, embedding_types, label_type="auto"):
 
     combined_df = pd.concat(data, ignore_index=True)
     return combined_df
+
+
+def filter_cosine_by_split(
+    cosine_df: pd.DataFrame, split_df: pd.DataFrame | None, split_type: str | None
+) -> pd.DataFrame:
+    """
+    If a custom split file is provided, restrict cosine_df rows to those present in the split file
+    (by study_id, and dicom_id if available). If split_type is provided, filter split_df to that split first.
+    """
+    if split_df is None:
+        return cosine_df
+    if split_type is not None and "split" in split_df.columns:
+        split_df = split_df[split_df["split"] == split_type]
+    allowed_studies = set(split_df["study_id"].unique().tolist())
+    filtered = cosine_df[cosine_df["study_id"].isin(allowed_studies)].copy()
+    if "dicom_id" in cosine_df.columns and "dicom_id" in split_df.columns:
+        allowed_dicoms = set(split_df["dicom_id"].unique().tolist())
+        filtered = filtered[filtered["dicom_id"].isin(allowed_dicoms)]
+    return filtered
 
 
 def count_positive_cases(labels, split_type_labels_df):
@@ -548,11 +571,25 @@ def main():
         default="auto",
         help="Type of labels to use: auto (CheXpert), labeled (test set), raw, convirt, or combined reports.",
     )
+    parser.add_argument(
+        "--split-file-path",
+        type=str,
+        default=None,
+        help="Optional path to a custom split CSV (subject_id,study_id,dicom_id,split). If provided, overrides the default split file.",
+    )
+    parser.add_argument(
+        "--labels",
+        type=str,
+        default=None,
+        help="Optional comma-separated list of labels to evaluate (overrides defaults).",
+    )
 
     args = parser.parse_args()
 
-    # Define labels based on label type
-    if args.label_type == "convirt":
+    # Define labels based on label type or user override
+    if args.labels is not None:
+        labels = [lbl.strip() for lbl in args.labels.split(",") if lbl.strip()]
+    elif args.label_type == "convirt":
         labels = [
             "Atelectasis",
             "Cardiomegaly",
@@ -623,11 +660,13 @@ def main():
 
     # Read and process data
     cosine_df, labels_df, split_df = read_data(
-        args.cosine_path, args.labels_path, args.label_type
+        args.cosine_path, args.labels_path, args.label_type, args.split_file_path
     )
     split_type_labels_df = filter_split_type_data(
         split_df, labels_df, args.split_type, args.label_type
     )
+    # If a custom split is provided, filter cosine_df to only the subset identifiers
+    cosine_df = filter_cosine_by_split(cosine_df, split_df, args.split_type)
     cosine_df_transformed = transform_cosine_df(
         cosine_df, labels, embedding_types, args.label_type
     )
