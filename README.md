@@ -1,6 +1,6 @@
 # ReMiX: Retrieval with Multiscale Image-text Cross-alignment
 
-**Cross-modal, cross-scale contrastive learning for chest X-ray and radiology report retrieval**
+**Cross-modal, cross-scale contrastive learning for chest X-ray image retrieval using free text queries**
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-green.svg)](LICENSE)
@@ -9,11 +9,11 @@
 
 ## Overview
 
-ReMiX is a novel training framework that addresses key limitations in current multimodal approaches by improving **chest X-ray to radiology report retrieval** through cross-modal, cross-scale contrastive learning. By combining global and local alignment strategies across both image and text modalities, ReMiX enables more fine-grained understanding and better alignment of chest X-rays with their corresponding written reports.
+ReMiX is a novel training framework that addresses key limitations in current multimodal approaches by enabling **chest X-ray image retrieval using free text search queries** through cross-modal, cross-scale contrastive learning. By combining global and local alignment strategies across both image and text modalities, ReMiX enables more fine-grained understanding and better alignment between clinical text queries and relevant chest X-ray images.
 
 ### Research Motivation
 
-Current multimodal approaches for biomedical image-text retrieval often fail to capture the complex relationships between chest X-rays and their corresponding radiology reports. Through systematic analysis of large radiology datasets—including embedding, clustering, and quantitative evaluation—we identified that existing methods lack:
+Searching through large chest X-ray datasets using free text queries is essential for clinical research and diagnosis, but current multimodal approaches fail to capture the complex relationships needed for effective retrieval. Through systematic analysis of large radiology datasets—including embedding, clustering, and quantitative evaluation—we identified that existing methods lack:
 
 1. **Fine-grained text-level local alignment**: Full radiology reports are lengthy and contain multiple findings, while retrieval queries are typically short and focused (e.g., "Findings consistent with Pneumonia"). Standard global alignment treats entire reports as single units, missing the opportunity to align sentence-level chunks that better match the granularity of these direct queries.
 2. **Cross-scale representation**: Effective retrieval requires understanding both whole reports and local text chunks at different scales to match diverse query types and improve retrieval accuracy.
@@ -23,11 +23,13 @@ ReMiX addresses these limitations through a unified cross-modal, cross-scale con
 
 ### Key Features
 
-- **Cross-Modal Cross-Scale Contrastive Learning**: Simultaneously optimizes four alignment objectives:
-  - **Image Global (IG)**: Whole chest X-ray to full report alignment
-  - **Text Global (TG)**: Full report to whole chest X-ray alignment
-  - **Image Local (IGL)**: Image regions (patches) to specific report findings alignment
-  - **Text Local (TGL)**: Sentence-level report chunks to relevant image regions—enabling better matching between short clinical queries and focused report findings
+- **Cross-Modal Cross-Scale Contrastive Learning**: Uses multiple levels of representation for alignment:
+  - **Image Global (IG)**: Whole chest X-ray image representations
+  - **Image Local (IL)**: Image patch/region-level representations
+  - **Text Global (TG)**: Full radiology report representations
+  - **Text Local (TL)**: Sentence-level text chunk representations
+
+  These representations are combined in different loss functions (e.g., `ig_tgl` aligns global image representations with both global and local text representations)
 - **Radiology-Specific Design**: Optimized for chest X-ray and radiology report characteristics
 - **Flexible Architecture Support**: Compatible with both BioViL (MIMIC-CXR) and GLORIA (CheXpertPlus) backbones
 - **Optional MLM Objectives**: Masked language modeling for improved clinical language understanding
@@ -68,7 +70,7 @@ The project uses `pyproject.toml` for dependency management, which automatically
 
 Update dataset paths in configuration files (`configs/*.yaml`) to match your local setup:
 - **MIMIC-CXR**: `/opt/gpudata/mimic-cxr/` (chest X-ray images and radiology reports)
-- **CheXpertPlus**: `/opt/gpudata/chexpertplus/` (chest X-ray images with radiology reports and impression labels)
+- **CheXpertPlus**: `/opt/gpudata/chexpertplus/` (chest X-ray images with radiology reports)
 
 ---
 
@@ -109,24 +111,24 @@ remix/
 ### Key Components
 
 #### `remix/` - Core Library
-- **`models/`**: Implementation of multiscale contrastive learning models with configurable loss combinations (IG, TG, IGL, TGL)
+- **`models/`**: Implementation of multiscale contrastive learning models with configurable loss combinations that align different representation levels (image global/local with text global/local)
 - **`datasets.py`**: Custom PyTorch datasets for MIMIC-CXR and CheXpertPlus with preprocessing and augmentation
 - **`utils.py`**: Tokenizers, data loaders, and utility functions
 
 #### `evaluation/` - Evaluation Pipeline
-Complete pipeline for assessing chest X-ray retrieval performance with three stages:
+Complete pipeline for assessing text-to-image retrieval performance with three stages:
 1. **Embedding Generation**: Extract chest X-ray image embeddings from trained models
 2. **Cosine Similarity**: Compare image embeddings with clinical text query embeddings (findings, pathologies)
 3. **Accuracy Metrics**: Calculate retrieval performance metrics including accuracy@n (precision at n positive cases), top-k accuracy, DCG, and NDCG
 
-The evaluation pipeline quantitatively measures how well models can retrieve relevant chest X-rays given radiology findings or pathology queries.
+The evaluation pipeline quantitatively measures how well models can retrieve relevant chest X-ray images when given free text queries about radiology findings or pathologies.
 
 See [`evaluation/README.md`](evaluation/README.md) for detailed documentation.
 
 #### `configs/` - Training Configurations
 YAML files defining hyperparameters, data paths, and training settings. Configure:
 - Model architecture (BioViL vs GLORIA)
-- Loss combinations (`ig_tg`, `igl_tgl`, etc.)
+- Loss combinations (which representation levels to align: `ig_tg`, `ig_tgl`, `igl_tg`, `igl_tgl`)
 - Batch size, learning rate, precision
 - Data preprocessing options
 
@@ -136,7 +138,7 @@ YAML files defining hyperparameters, data paths, and training settings. Configur
 
 ### Training
 
-Train a chest X-ray retrieval model using PyTorch Lightning CLI:
+Train a text-to-image retrieval model using PyTorch Lightning CLI:
 
 ```bash
 # BioViL on MIMIC-CXR with full cross-modal, cross-scale objectives
@@ -155,17 +157,17 @@ python run.py fit \
 ```
 
 **Loss Combinations:**
-- `igl_tgl`: Full cross-modal, cross-scale (all four alignment objectives)
-- `ig_tg`: Image global + Text global (baseline approach)
-- `igl_tg`: Image cross-scale + Text global only
-- `ig_tgl`: Image global + Text cross-scale only
+- `igl_tgl`: Image global+local aligned with Text global+local (full cross-scale model)
+- `ig_tgl`: Image global aligned with Text global+local
+- `igl_tg`: Image global+local aligned with Text global
+- `ig_tg`: Image global aligned with Text global (baseline)
 
 **Training Scripts:**
-Pre-configured bash scripts for the full `igl_tgl` model are available in `scripts_v2/`. For other loss combinations, use the command-line interface with `run.py` as shown above.
+Pre-configured bash scripts for all loss combinations are available in `scripts_v2/` and `scripts_v3/`.
 
 ### Evaluation
 
-Assess chest X-ray retrieval performance by generating and running evaluation scripts:
+Assess text-to-image retrieval performance by generating and running evaluation scripts:
 
 ```bash
 cd evaluation
@@ -185,7 +187,7 @@ python generate_evaluation_script.py \
 bash bash_scripts/generated_script.sh
 ```
 
-The evaluation pipeline tests how accurately models can retrieve chest X-rays matching specific pathology queries (e.g., "Findings consistent with Pneumonia"), producing quantitative metrics including precision@n, top-k accuracy, and NDCG scores.
+The evaluation pipeline tests how accurately models can retrieve relevant chest X-ray images when given free text queries about specific pathologies (e.g., "Findings consistent with Pneumonia"), producing quantitative metrics including precision@n, top-k accuracy, and NDCG scores.
 
 See [`evaluation/README.md`](evaluation/README.md) for comprehensive evaluation documentation.
 
@@ -206,7 +208,11 @@ Models follow a standardized naming format:
 - `architecture`: `biovil` or `gloria`
 - `view`: `frontal` (frontal X-rays only)
 - `section`: `impression` (impression section of reports)
-- `loss`: `igl_tgl`, `igl_tg`, `ig_tgl`, `ig_tg`
+- `loss`: Which representations are aligned
+  - `igl_tgl`: Image global+local ↔ Text global+local
+  - `ig_tgl`: Image global ↔ Text global+local
+  - `igl_tg`: Image global+local ↔ Text global
+  - `ig_tg`: Image global ↔ Text global
 - `mlm`: `mlm` or `no-mlm`
 
 ---
