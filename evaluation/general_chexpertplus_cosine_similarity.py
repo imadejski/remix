@@ -9,7 +9,7 @@ from tqdm import tqdm
 
 from remix.models import InferenceEngine
 
-BASE_MODEL_PATH = "microsoft/BiomedVLP-CXR-BERT-specialized"
+BASE_MODEL_PATH = "emilyalsentzer/Bio_ClinicalBERT"
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print("Using device:", DEVICE, file=sys.stderr)
 
@@ -155,7 +155,6 @@ def main(
             "Fracture",
             "Lung Lesion",
             "Lung Opacity",
-            "Airspace Opacity",
             "No Finding",
             "Pleural Effusion",
             "Pleural Other",
@@ -240,7 +239,7 @@ def main(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Generalized cosine similarity calculation for MIMIC embeddings"
+        description="Generalized cosine similarity calculation for CheXpertPlus embeddings"
     )
     parser.add_argument(
         "model_checkpoint_path",

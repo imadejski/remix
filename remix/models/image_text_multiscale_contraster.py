@@ -1,3 +1,4 @@
+import sys
 from collections import OrderedDict
 from typing import Literal
 
@@ -5,9 +6,9 @@ import torch
 import torch.nn.functional as F
 from PIL import Image
 from torchvision import transforms
-from torchvision.io import read_image
-from transformers import BertConfig, BertForMaskedLM, BertTokenizer
+from transformers import AutoTokenizer, BertConfig, BertForMaskedLM, BertTokenizer
 
+from ..utils import BioViLTransform, CXRTokenizer, GLoRIATransform
 from .modules import LocalGlobalContraster, ResNet50Encoder
 
 ALIGNMENT_T = Literal[
@@ -166,7 +167,8 @@ class ImageTextMultiScaleContraster(BertForMaskedLM):
         else:
             print(
                 "Loading pretrained model from non-base model, "
-                "check that both image and text encoders are loaded correctly"
+                "check that both image and text encoders are loaded correctly",
+                file=sys.stderr,
             )
         return model
 
@@ -184,17 +186,22 @@ class ImageTextMultiScaleContraster(BertForMaskedLM):
             strict=False,
         )
 
-        print("Loaded GLoRIA BERT weights, missing the following keys:")
+        print(
+            "Loaded GLoRIA BERT weights, missing the following keys:", file=sys.stderr
+        )
         for k in incompatible_keys.missing_keys:
             if k.startswith("resnet.") or k.startswith("contraster."):
                 # expected that these keys won't be in sd
                 continue
-            print(k)
-        print()
-        print("Loaded GLoRIA BERT weights, did not expect the following keys:")
+            print(k, file=sys.stderr)
+        print(file=sys.stderr)
+        print(
+            "Loaded GLoRIA BERT weights, did not expect the following keys:",
+            file=sys.stderr,
+        )
         for k in incompatible_keys.unexpected_keys:
-            print(k)
-        print()
+            print(k, file=sys.stderr)
+        print(file=sys.stderr)
 
 
 class InferenceEngine:
@@ -206,22 +213,55 @@ class InferenceEngine:
             model_checkpoint, config=self.config
         )
         self.model.eval()
-        self.tokenizer = BertTokenizer.from_pretrained(tokenizer_checkpoint)
+        self.tokenizer = CXRTokenizer.from_pretrained(tokenizer_checkpoint)
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model.to(self.device)
 
-    def preprocess_image(self, image_path):
-        image = read_image(image_path)
-        assert image.shape[0] == 1  # greyscale
-        image = Image.fromarray(image.numpy()[0]).convert("L")
-        transform = transforms.Compose(
-            [
-                transforms.Resize((224, 224)),
-                transforms.ToTensor(),
-                transforms.Normalize(mean=[0.485], std=[0.229]),
-            ]
+        # Determine model type and set appropriate transform
+        self.model_type = self._detect_model_type(
+            model_checkpoint, tokenizer_checkpoint
         )
-        image_tensor = transform(image)
+        self.transform = self._get_transform_for_model_type(self.model_type)
+
+    def _detect_model_type(self, model_checkpoint, tokenizer_checkpoint):
+        """Detect model type using the same logic as the model loading code"""
+
+        # Follow the same logic as ImageTextMultiScaleContrasterConfig.from_pretrained()
+        # and ImageTextMultiScaleContraster.from_pretrained()
+        if "gloria_chexpert_resnet50.ckpt" in model_checkpoint:
+            return "gloria"
+
+        # Check for ChexpertPlus/Gloria models (fine-tuned from Gloria)
+        checkpoint_lower = model_checkpoint.lower()
+        if "chexpert" in checkpoint_lower or "gloria" in checkpoint_lower:
+            return "gloria"
+
+        # Default to BioViL for mimic-biovil models and others
+        # (this matches the "else" case in the original model loading logic)
+        return "biovil"
+
+    def _get_transform_for_model_type(self, model_type):
+        """Get the appropriate transform for the model type"""
+        if model_type == "gloria":
+            print(
+                "Using GLoRIA transform: resize=256, center_crop=224, normalize=(0.5, 0.5), upsample=299",
+                file=sys.stderr,
+            )
+            return GLoRIATransform()
+        else:  # biovil
+            print(
+                "Using BioViL transform: resize=512, center_crop=448, no normalization",
+                file=sys.stderr,
+            )
+            return BioViLTransform()
+
+    def preprocess_image(self, image_path):
+        """Preprocess image using the appropriate transform for the model type"""
+        image = Image.open(image_path)
+        assert image.mode == "L"  # greyscale
+
+        # Apply the model-specific transform
+        image_tensor = self.transform(image)
         return image_tensor
 
     def prep_image(self, image_input):
@@ -349,16 +389,20 @@ class InferenceEngine:
             input_ids, attention_mask = texts
 
         with torch.no_grad():
-            text_outputs = super(ImageTextMultiScaleContraster, self.model).forward(
+            text_outputs = self.model.bert(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
+                return_dict=True,
             )
-            text_embeddings = text_outputs.last_hidden_state[:, 0, :]  # (B, H)
+
+            cls_embedding = text_outputs.last_hidden_state[:, 0, :]  # (B, hidden_size)
+            projected = self.model.contraster.proj_t(
+                cls_embedding
+            )  # (B, projection_dim)
 
             if normalize:
-                text_embeddings = F.normalize(text_embeddings, dim=-1)
+                projected = F.normalize(projected, dim=-1)
 
-            if len(texts) == 1:
-                text_embeddings = text_embeddings.squeeze(0)
-
-            return text_embeddings
+            # Always return 2D tensor for consistency [B, projection_dim]
+            # Don't squeeze for single texts to maintain batch dimension
+            return projected

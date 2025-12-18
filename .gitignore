@@ -175,3 +175,15 @@ temp/
 runs/
 run-*.sh
 v2-run-*.sh
+
+# data specific directories
+data/20250707_model_evaluation_incorrect_labels
+data/20250715_model_evaluation
+data/20250728_biovil_baseline_evaluation
+data/20250804_model_evaluation_mlm_correction
+data/20250825_model_evaluation_updated_model_new_chunking
+data/20251006_subset_exclusive_eval_train
+data/20251013_subset_exclusive_eval_train_original_loss
+data/20251027_gloria_chexpert_frontal_impression_original_loss
+# testing notebooks
+training/global_local_alignment_testing.ipynb

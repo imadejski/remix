@@ -13,16 +13,36 @@ def read_data(
     Reads in csvs with cosine similarity scores, ground-truth labels, and split
     """
     cosine_df = pd.read_csv(cosine_path)
-    labels_df = pd.read_csv(labels_path)
+
+    # Handle JSON format for labels (e.g., impression_fixed.json)
+    if labels_path.endswith(".json"):
+        labels_df = pd.read_json(labels_path, lines=True)
+        # Extract study_id from path_to_image if needed
+        if "path_to_image" in labels_df.columns and "study_id" not in labels_df.columns:
+            # Extract from path like "train/patient42142/study5/view1_frontal.jpg"
+            # to match split.csv format: subject_id="patient42142", study_id="patient42142_study5"
+            patient_match = labels_df["path_to_image"].str.extract(r"(patient\d+)")
+            study_match = labels_df["path_to_image"].str.extract(r"(study\d+)")
+            view_match = labels_df["path_to_image"].str.extract(
+                r"(view\d+_(?:frontal|lateral))"
+            )
+
+            labels_df["subject_id"] = patient_match[0]
+            labels_df["study_id"] = patient_match[0] + "_" + study_match[0]
+            labels_df["dicom_id"] = (
+                patient_match[0] + "_" + study_match[0] + "_" + view_match[0]
+            )
+    else:
+        labels_df = pd.read_csv(labels_path)
 
     if label_type == "labeled":
         split_df = None
     elif split_file_path is not None:
         split_df = pd.read_csv(split_file_path)
     elif label_type == "combined":
-        split_df = pd.read_csv("/opt/gpudata/mimic-cxr/mimic-cxr-2.0.0-split.csv")
+        split_df = pd.read_csv("/opt/gpudata/chexpertplus/split.csv")
     else:  # auto, raw, convirt
-        split_df = pd.read_csv("/opt/gpudata/mimic-cxr/mimic-cxr-2.0.0-split.csv")
+        split_df = pd.read_csv("/opt/gpudata/chexpertplus/split.csv")
 
     return cosine_df, labels_df, split_df
 
@@ -298,18 +318,12 @@ def calculate_metrics(
                     print(
                         f"Warning: No positive cases for label '{label}'. Setting accuracy@n and DCG@n to NaN."
                     )
-                label_results[f"{emb}_max_accuracy"] = (
-                    np.nan if num_positives == 0 else 0
-                )
-                label_results[f"{emb}_mean_accuracy"] = (
-                    np.nan if num_positives == 0 else 0
-                )
-                label_results[f"{emb}_max_dcg_n"] = np.nan if num_positives == 0 else 0
-                label_results[f"{emb}_mean_dcg_n"] = np.nan if num_positives == 0 else 0
-                label_results[f"{emb}_max_ndcg_n"] = np.nan if num_positives == 0 else 0
-                label_results[f"{emb}_mean_ndcg_n"] = (
-                    np.nan if num_positives == 0 else 0
-                )
+                label_results[f"{emb}_max_accuracy"] = np.nan
+                label_results[f"{emb}_mean_accuracy"] = np.nan
+                label_results[f"{emb}_max_dcg_n"] = np.nan
+                label_results[f"{emb}_mean_dcg_n"] = np.nan
+                label_results[f"{emb}_max_ndcg_n"] = np.nan
+                label_results[f"{emb}_mean_ndcg_n"] = np.nan
 
             # Calculate top_k metrics and DCG@k for each k in k_values
             for k in k_values:
@@ -357,15 +371,6 @@ def calculate_metrics(
                     )
                 else:
                     # Set to NaN if insufficient positive cases or total samples
-                    if num_positives < k:
-                        print(
-                            f"Warning: Not enough positive cases ({num_positives} < {k}) for meaningful top-{k} metrics for label '{label}'. Setting to NaN."
-                        )
-                    elif len(max_df_sorted) < k or len(mean_df_sorted) < k:
-                        print(
-                            f"Warning: Not enough total samples (max:{len(max_df_sorted)}, mean:{len(mean_df_sorted)} < {k}) for top-{k} metrics for label '{label}'. Setting to NaN."
-                        )
-
                     label_results_k[f"{emb}_max_accuracy_top_{k}"] = np.nan
                     label_results_k[f"{emb}_mean_accuracy_top_{k}"] = np.nan
                     label_results_dcg[f"{emb}_max_dcg_{k}"] = np.nan
@@ -521,7 +526,7 @@ def resample_and_calculate_metrics(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Calculate accuracy, top-k, DCG, and NDCG metrics for cosine similarity data."
+        description="Calculate accuracy, top-k, DCG, and NDCG metrics for CheXpertPlus cosine similarity data."
     )
     parser.add_argument(
         "-c",
@@ -548,7 +553,7 @@ def main():
         "--split-type",
         type=str,
         required=True,
-        help="Data split type (e.g., 'validate', 'train').",
+        help="Data split type (e.g., 'validate', 'train', 'test').",
     )
     parser.add_argument(
         "-n",

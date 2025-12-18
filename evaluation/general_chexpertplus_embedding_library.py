@@ -1,4 +1,5 @@
 import argparse
+import os
 import sys
 
 import numpy as np
@@ -11,7 +12,7 @@ from remix.models import InferenceEngine
 RESIZE = 512
 CENTER_CROP_SIZE = 512
 
-BASE_MODEL_PATH = "microsoft/BiomedVLP-CXR-BERT-specialized"
+BASE_MODEL_PATH = "emilyalsentzer/Bio_ClinicalBERT"
 
 # Device setup
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -25,29 +26,32 @@ def create_split_df(file_path, split_type):
     return split_type_df
 
 
-def create_paths(df):
-    """Creates a column with the path for each individual image,
-    takes a dataframe with columns subject_ids, study_ids, and dicom_ids"""
-    for index, row in df.iterrows():
-        # retrieve each sub folder value to get path
-        patient_id = row["subject_id"]
-        study_id = row["study_id"]
-        dicom_id = row["dicom_id"]
+def create_paths(df, split_type):
+    """Create image file paths for CheXpertPlus PNG layout:
+    /opt/gpudata/chexpertplus/PNG/<split>/<patient_id>/<study>/<view>.png
 
-        # assign path in df
-        path = (
-            "/opt/gpudata/mimic-cxr/files/p"
-            + str(patient_id)[:2]
-            + "/p"
-            + str(patient_id)
-            + "/s"
-            + str(study_id)
-            + "/"
-            + str(dicom_id)
-            + ".jpg"
+    Expects df to have columns: subject_id, dicom_id where dicom_id looks like
+    "patient00002_study1_view1_frontal".
+
+    Note: CheXpert+ test split images are stored in the 'valid' directory.
+    """
+    base_dir = "/opt/gpudata/chexpertplus/PNG"
+    # Map test split to valid directory (CheXpert+ stores test images in valid folder)
+    dir_split_type = "valid" if split_type == "test" else split_type
+
+    for index, row in df.iterrows():
+        patient_id = str(row["subject_id"])  # e.g., "patient00001"
+        dicom_id = str(row["dicom_id"])  # e.g., "patient00001_study1_view1_frontal"
+
+        parts = dicom_id.split("_")
+        # Default fallbacks in case of unexpected format
+        study_part = parts[1] if len(parts) >= 2 else "study1"
+        view_part = "_".join(parts[2:]) if len(parts) >= 3 else dicom_id
+
+        path = os.path.join(
+            base_dir, dir_split_type, patient_id, study_part, f"{view_part}.png"
         )
         df.loc[index, "file_path"] = path
-        df.loc[index, "study_id"] = study_id
     return df
 
 
@@ -94,12 +98,12 @@ def main(
     if split_file_path:
         split_file = split_file_path
     elif frontal_impression_only:
-        split_file = "/opt/gpudata/imadejski/mimic-cxr/mimic-cxr-2.0.0-frontal-impression-only.csv"
+        split_file = "/opt/gpudata/imadejski/chexpertplus/chexpertplus-frontal-impression-only.csv"
     else:
-        split_file = "/opt/gpudata/mimic-cxr/mimic-cxr-2.0.0-split.csv"
+        split_file = "/opt/gpudata/chexpertplus/split.csv"
 
     split_df = create_split_df(split_file, split_type)
-    split_df = create_paths(split_df)
+    split_df = create_paths(split_df, split_type)
 
     split_df["embedding"] = np.nan
 
